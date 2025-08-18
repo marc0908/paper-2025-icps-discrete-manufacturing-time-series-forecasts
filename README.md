@@ -1,5 +1,7 @@
 # Deep Learning-based Time Series Forecasting for Industrial Discrete Process Data
 
+This repository contains the dataset and source code accompanying the publication available at  https://ieeexplore.ieee.org/document/11087869 .
+
 ## Dataset
 
 The dataset is available in the subfolder `dataset/`.
@@ -24,11 +26,34 @@ To view a copy of this license, visit https://creativecommons.org/licenses/by-sa
 
 ## Source Code
 
-The source code will be available in the `src/` folder in 1-2 weeks.
-It is currently undergoing necessary refactoring, as much of the TFB source code (https://github.com/decisionintelligence/TFB) included and modified. 
-Our goal is to publish the code so that it only contains own written code, with the TFB source code added as a Git submodule to ensure clear separation between the two."
+The source code is available in the `src/` folder. The included readme gives a brief introduction on environment setup and on how to run evaluations. If you have further questions please do not hesistate to contact us via email.
 
 **License**
 The source code is licensed under the terms of the MIT license.
 
+# Acknowledgement
 
+We would like to thank the authors of the following published code:
+
+https://github.com/decisionintelligence/TFB
+
+https://github.com/Thinklab-SJTU/Crossformer
+
+https://github.com/thuml/Time-Series-Library
+
+# Citation
+
+If you find this dataset or published source code useful, please cite our publication via
+
+```
+@inproceedings{SRUH2025,
+  title         = {Deep Learning-based Time Series Forecasting for Industrial Discrete Process Data},
+  publisher     = {IEEE},
+  booktitle     = {{8th IEEE Conference on Industrial Cyber-Physical Systems (ICPS)}},
+  address       = {Emden, Germany},
+  author        = {Sa\ss{}nick, Olaf and Rosenstatter, Thomas and Unterweger, Andreas and Huber, Stefan},
+  month         = may,
+  year          = 2025,
+  doi           = {10.1109/ICPS65515.2025.11087869},
+}
+```
