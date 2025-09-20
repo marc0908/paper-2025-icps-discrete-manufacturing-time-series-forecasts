@@ -33,6 +33,7 @@ sys.path.append(tfb_path)
 os.environ["PYTHONPATH"] = tfb_path
 from ts_benchmark.baselines.duet.models.duet_model import DUETModel
 from ts_benchmark.baselines.pdf.models.PDF import Model as PDF_model
+from ts_benchmark.baselines.time_series_library.models.TimeXer import Model as TimeXerModel
 from ts_benchmark.data import data_source
 from ts_benchmark.models.model_loader import get_models
 from ts_benchmark.baselines.duet.utils.tools import adjust_learning_rate
@@ -386,6 +387,8 @@ def train_model(model_config, evaluation_config, **kwargs):
         model.model = DUETModel(model.config)
     elif "pdf" in model_config["models"][0]["model_name"]:
         model.model = PDF_model(model.config)
+    elif "TimeXer" in model_config["models"][0]["model_name"]:
+        model.model = TimeXerModel(model.config)
     else:
         model.model = model.model_class(model.config)
 

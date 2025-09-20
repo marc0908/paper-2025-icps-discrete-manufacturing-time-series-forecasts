@@ -68,6 +68,13 @@ def assemble_setup(setup_name):
             ),
             itransformer_searchspace(),
         ),
+        "timexer": (
+            config.default_eval_config(),
+            config.model_config(
+                "timexer.TimeXer", decoder_input_required=True, has_loss_importance=False
+            ),
+            timexer_searchspace(),
+        ),
         "dlinear": (
             config.default_eval_config(),
             config.model_config("time_series_library.DLinear", "transformer_adapter"),
@@ -82,7 +89,7 @@ def assemble_setup(setup_name):
             config.default_eval_config(),
             config.model_config("pdf.PDF", decoder_input_required=False),
             pdf_searchspace(),
-        ),
+        )
     }
 
     return setups[setup_name]
@@ -158,6 +165,31 @@ def itransformer_searchspace():
         "patience": 10,
         "moving_avg": tune.choice([1, 3, 5]),
         # TODO: freq?
+    }
+    return search_space
+
+
+def timexer_searchspace():
+    search_space = {
+        "batch_size": 64,
+        "d_ff": tune.choice([64, 128, 256, 512]),
+        "d_model": tune.choice([64, 128, 256, 512]),
+        "e_layers": tune.choice([1, 2, 3]),
+        "dropout": tune.uniform(0.0001, 0.2),
+        "factor": tune.randint(1, 20),
+        "features": "M",  # TimeXer specific: M for multivariate, S for univariate
+        "horizon": 400,
+        "loss": "MAE",
+        "lr": tune.loguniform(1e-5, 1e-2),
+        "lradj": "type1",
+        "n_heads": tune.randint(2, 20),
+        "norm": True,  
+        "num_epochs": config.max_epochs,
+        "patch_len": tune.choice([10, 50, 100, 200, 400]),  # TimeXer specific patch length
+        "patience": 10,
+        "seq_len": 1600,
+        "use_norm": True,  # TimeXer specific normalization parameter
+        "moving_avg": tune.choice([1, 3, 5]),
     }
     return search_space
 
