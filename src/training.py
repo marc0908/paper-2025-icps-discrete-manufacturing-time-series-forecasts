@@ -341,7 +341,18 @@ def forecast_fit(model, train_dataset, validate_dataset, **kwargs) -> "ModelBase
             loss.backward()
             optimizer.step()
 
-        valid_loss = model.validate(valid_data_loader, criterion)
+        # DeepForecastingModelBase.validate signature: validate(valid_data_loader, series_dim, criterion)
+        # Our custom training loop previously omitted series_dim, causing a TypeError.
+        series_dim = getattr(model.config, 'c_out', None)
+        if series_dim is None:
+            # Fallback: infer from batch (target shape: [B, T, D])
+            first_batch = next(iter(valid_data_loader))
+            series_dim = first_batch[1].shape[-1]
+        try:
+            valid_loss = model.validate(valid_data_loader, series_dim, criterion)
+        except TypeError:
+            # In case some models use old signature validate(valid_data_loader, criterion)
+            valid_loss = model.validate(valid_data_loader, criterion)  # type: ignore
 
         callback_fcn = kwargs.get("training_progress_callback", None)
         if callback_fcn:
