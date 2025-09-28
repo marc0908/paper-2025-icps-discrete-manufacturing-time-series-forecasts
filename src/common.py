@@ -92,7 +92,7 @@ def sum_model_params(model):
 
 def forecast_custom(model, history: np.ndarray, use_best_checkpoint=True) -> np.ndarray:
 
-    if use_best_checkpoint:
+    if use_best_checkpoint and hasattr(model, 'early_stopping') and model.early_stopping.check_point is not None:
         model.model.load_state_dict(model.early_stopping.check_point)
 
     if model.config.norm:
