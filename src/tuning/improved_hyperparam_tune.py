@@ -307,7 +307,14 @@ def run_advanced_hyperparameter_optimization(
     
     # Initialize Ray if not already done
     if not ray.is_initialized():
-        ray.init(runtime_env={"env_vars": {"PYTHONPATH": os.environ["PYTHONPATH"]}})
+        ray.init(
+            runtime_env={
+                "working_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
+                "env_vars": {
+                    "PYTHONPATH": os.environ["PYTHONPATH"]
+                }
+            }
+        )
     
     # Register trainable
     trainable_name = experiment_name or f"{model_setup}_advanced_tuning"
