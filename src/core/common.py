@@ -6,6 +6,7 @@ import sys
 
 import numpy as np
 import pandas as pd
+from pandas.api.types import is_numeric_dtype
 import torch
 
 tfb_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "TFB"))
@@ -22,6 +23,14 @@ def set_fixed_seed(seed=default_seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        try:
+            import torch.backends.cudnn as cudnn
+            cudnn.deterministic = True
+            cudnn.benchmark = False
+        except Exception:
+            pass
 
 
 def columns_to_use():
@@ -49,7 +58,50 @@ def load_csv(file_path):
     )
     df.set_index("date", inplace=True)
 
+    validate_dataframe_schema(df, dataset_name=os.path.basename(file_path))
     return df
+
+
+def validate_dataframe_schema(df: pd.DataFrame, dataset_name: str = "dataset") -> None:
+    """Validate that required columns exist and are numeric.
+
+    Raises a ValueError with a clear message if validation fails.
+    """
+    required_cols = columns_to_use()
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"{dataset_name}: Missing required columns: {missing}. Present: {list(df.columns)}"
+        )
+
+    non_numeric = []
+    for col in required_cols:
+        if not is_numeric_dtype(df[col]):
+            # attempt to coerce to numeric without modifying original df
+            coerced = pd.to_numeric(df[col], errors="coerce")
+            if coerced.isna().any():
+                non_numeric.append(col)
+            else:
+                # safe to coerce in-place if no NaNs introduced
+                df[col] = coerced
+    if non_numeric:
+        raise ValueError(
+            f"{dataset_name}: Non-numeric values detected in columns: {non_numeric}. "
+            f"Please ensure these columns are numeric."
+        )
+
+
+def resolve_data_paths(data_path=None, data_path_overrides=None):
+    """Resolve dataset paths with environment overrides and safe defaults."""
+    default_main = "../dataset/pick_n_place_procedure_dataset.csv"
+    default_overrides = "../dataset/pick_n_place_procedure_w_overrides.csv"
+
+    env_main = os.environ.get("DATA_PATH")
+    env_over = os.environ.get("DATA_PATH_OVERRIDES")
+
+    final_main = data_path or env_main or default_main
+    final_over = data_path_overrides or env_over or default_overrides
+    return final_main, final_over
 
 
 def split_data(data, tv_ratio, train_ratio_in_tv):

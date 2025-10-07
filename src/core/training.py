@@ -31,12 +31,8 @@ import common
 tfb_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "TFB"))
 sys.path.append(tfb_path)
 os.environ["PYTHONPATH"] = tfb_path
-from ts_benchmark.baselines.duet.models.duet_model import DUETModel
-from ts_benchmark.baselines.pdf.models.PDF import Model as PDF_model
-from ts_benchmark.baselines.time_series_library.models.TimeXer import Model as TimeXerModel
 from ts_benchmark.data import data_source
 from ts_benchmark.models.model_loader import get_models
-from ts_benchmark.baselines.duet.utils.tools import adjust_learning_rate
 
 
 class CustomDatasetWithOverrides(Dataset):
@@ -272,19 +268,43 @@ def forecast_fit(model, train_dataset, validate_dataset, **kwargs) -> "ModelBase
 
     config = model.config
 
+    num_workers = getattr(config, "num_workers", 0) or 0
+    # Reproducible workers and shuffling
+    base_seed = kwargs.get("seed", None)
+    def _worker_init_fn(worker_id: int):
+        if base_seed is None:
+            return
+        seed = base_seed + worker_id
+        import random as _random
+        import numpy as _np
+        import torch as _torch
+        _random.seed(seed)
+        _np.random.seed(seed)
+        _torch.manual_seed(seed)
+    data_generator = None
+    if base_seed is not None:
+        try:
+            data_generator = torch.Generator()
+            data_generator.manual_seed(base_seed)
+        except Exception:
+            data_generator = None
     train_data_loader = DataLoader(
         train_dataset,
-        num_workers=1,
+        num_workers=num_workers,
         drop_last=False,
         batch_size=config.batch_size,
         shuffle=True,
+        worker_init_fn=_worker_init_fn,
+        generator=data_generator,
     )
     valid_data_loader = DataLoader(
         validate_dataset,
-        num_workers=1,
+        num_workers=num_workers,
         drop_last=False,
         batch_size=config.batch_size,
         shuffle=True,
+        worker_init_fn=_worker_init_fn,
+        generator=data_generator,
     )
 
     if config.loss == "MSE":
@@ -299,12 +319,19 @@ def forecast_fit(model, train_dataset, validate_dataset, **kwargs) -> "ModelBase
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.early_stopping = common.EarlyStopping(patience=config.patience)
+    try:
+        torch.use_deterministic_algorithms(True)
+    except Exception:
+        pass
     model.model.to(device)
     total_params = sum(p.numel() for p in model.model.parameters() if p.requires_grad)
 
     print(f"Total trainable parameters: {total_params}")
 
     for epoch in range(config.num_epochs):
+        train_loss_sum = 0.0
+        num_batches = 0
+        last_grad_norm = None
         if kwargs.get("random_time_offset_per_epoch", False):
             time_offset = np.random.randint(2**14, size=1)[0]
             train_data_loader.dataset.time_offset = time_offset
@@ -340,7 +367,20 @@ def forecast_fit(model, train_dataset, validate_dataset, **kwargs) -> "ModelBase
                 loss = loss + loss_importance
 
             loss.backward()
+            # Compute gradient norm (last batch)
+            try:
+                total_norm_sq = 0.0
+                for p in model.model.parameters():
+                    if p.grad is not None:
+                        param_norm = p.grad.data.norm(2).item()
+                        total_norm_sq += param_norm * param_norm
+                last_grad_norm = total_norm_sq ** 0.5
+            except Exception:
+                last_grad_norm = None
+
             optimizer.step()
+            train_loss_sum += float(loss.item())
+            num_batches += 1
 
         # DeepForecastingModelBase.validate signature: validate(valid_data_loader, series_dim, criterion)
         # Our custom training loop previously omitted series_dim, causing a TypeError.
@@ -357,7 +397,15 @@ def forecast_fit(model, train_dataset, validate_dataset, **kwargs) -> "ModelBase
 
         callback_fcn = kwargs.get("training_progress_callback", None)
         if callback_fcn:
-            callback_fcn(valid_loss, model.early_stopping.val_loss_min, model)
+            avg_train_loss = train_loss_sum / max(1, num_batches)
+            current_lr = optimizer.param_groups[0].get("lr", None)
+            callback_fcn(
+                valid_loss,
+                model.early_stopping.val_loss_min,
+                model,
+                epoch,
+                {"train_loss": avg_train_loss, "lr": current_lr, "grad_norm": last_grad_norm},
+            )
 
         if model.early_stopping(valid_loss, model.model):
             break
@@ -366,8 +414,16 @@ def forecast_fit(model, train_dataset, validate_dataset, **kwargs) -> "ModelBase
 
 
 def train_model(model_config, evaluation_config, **kwargs):
-    if "seed" in evaluation_config:
-        common.set_fixed_seed(evaluation_config["seed"])
+    # Apply seed from evaluation config; prefer strategy_args.seed
+    seed = (
+        evaluation_config.get("strategy_args", {}).get("seed")
+        if isinstance(evaluation_config, dict)
+        else None
+    )
+    if seed is None:
+        seed = evaluation_config.get("seed") if isinstance(evaluation_config, dict) else None
+    if seed is not None:
+        common.set_fixed_seed(seed)
 
     model_factory = get_models(model_config)[0]
     model = model_factory()
@@ -376,19 +432,19 @@ def train_model(model_config, evaluation_config, **kwargs):
     for key, val in model.config.__dict__.items():
         print(key, val)
 
-    data = common.load_csv(kwargs["data_path"])
-    data_w_overrides = common.load_csv(kwargs["data_path_overrides"])
+    # Resolve dataset paths with env/kwargs defaults
+    data_path, data_path_overrides = common.resolve_data_paths(
+        kwargs.get("data_path"), kwargs.get("data_path_overrides")
+    )
+    data = common.load_csv(data_path)
+    data_w_overrides = common.load_csv(data_path_overrides)
 
     setattr(model.config, "task_name", "short_term_forecast")
     model.multi_forecasting_hyper_param_tune(data)
 
-    # TODO: each model needs to be constructable the same ...
-    if "duet" in model_config["models"][0]["model_name"]:
-        model.model = DUETModel(model.config)
-    elif "pdf" in model_config["models"][0]["model_name"]:
-        model.model = PDF_model(model.config)
-    elif "TimeXer" in model_config["models"][0]["model_name"]:
-        model.model = TimeXerModel(model.config)
+    # Prefer adapters' _init_model when available; otherwise use model_class
+    if hasattr(model, "_init_model"):
+        model.model = model._init_model()
     else:
         model.model = model.model_class(model.config)
 
@@ -437,6 +493,7 @@ def train_model(model_config, evaluation_config, **kwargs):
         model.config.input_sampling,
     )
 
+    start_time = time.time()
     forecast_fit(
         model,
         train_dataset,
@@ -445,4 +502,18 @@ def train_model(model_config, evaluation_config, **kwargs):
         random_time_offset_per_epoch=True,
         already_transformed=True,
         training_progress_callback=kwargs.get("training_progress_callback", None),
+        seed=seed,
     )
+    elapsed = time.time() - start_time
+
+    try:
+        params_millions = sum(p.numel() for p in model.model.parameters()) / 1e6
+    except Exception:
+        params_millions = None
+
+    result = {
+        "val_loss": getattr(model.early_stopping, "val_loss_min", float("inf")),
+        "training_time": elapsed,
+        "model_params_millions": params_millions,
+    }
+    return result

@@ -13,13 +13,17 @@ import ray
 from ray import tune, train
 from ray.train import Checkpoint, CheckpointConfig
 from ray.tune.schedulers import ASHAScheduler, PopulationBasedTraining
+from ray.tune.logger import TBXLoggerCallback
 from ray.tune.search.hyperopt import HyperOptSearch
 from ray.tune.search.bayesopt import BayesOptSearch
 from ray.tune.search.optuna import OptunaSearch
 from ray.tune.search import ConcurrencyLimiter
 # from ray.tune.stopper import MaximumIterationStopper  # Not needed
 
-import hyperparam_search_spaces
+try:
+    import improved_search_spaces as hyperparam_search_spaces
+except ImportError:
+    import hyperparam_search_spaces
 import training
 import common
 import config
@@ -131,7 +135,7 @@ def get_advanced_search_algorithm(
     return ConcurrencyLimiter(base_algo, max_concurrent=max_concurrent)
 
 
-def enhanced_callback(val_loss, val_loss_min, model, epoch, metrics_history):
+def enhanced_callback(val_loss, val_loss_min, model, epoch, metrics_history, extras: dict = None):
     """Enhanced callback with additional metrics and early stopping logic"""
     logger = logging.getLogger(__name__)
     
@@ -156,25 +160,26 @@ def enhanced_callback(val_loss, val_loss_min, model, epoch, metrics_history):
             }
             
             checkpoint = Checkpoint.from_directory(temp_checkpoint_dir)
-            train.report(
-                {
-                    "val_loss": val_loss,
-                    "epoch": epoch,
-                    "improvement": val_loss_min - val_loss,
-                    "training_efficiency": epoch / val_loss if val_loss > 0 else 0
-                }, 
-                checkpoint=checkpoint
-            )
-            logger.info(f"New best model saved: {val_loss:.6f}")
-    else:
-        train.report(
-            {
+            payload = {
                 "val_loss": val_loss,
                 "epoch": epoch,
-                "improvement": 0,
-                "training_efficiency": epoch / val_loss if val_loss > 0 else 0
+                "improvement": val_loss_min - val_loss,
+                "training_efficiency": epoch / val_loss if val_loss > 0 else 0,
             }
-        )
+            if extras:
+                payload.update(extras)
+            train.report(payload, checkpoint=checkpoint)
+            logger.info(f"New best model saved: {val_loss:.6f}")
+    else:
+        payload = {
+            "val_loss": val_loss,
+            "epoch": epoch,
+            "improvement": 0,
+            "training_efficiency": epoch / val_loss if val_loss > 0 else 0,
+        }
+        if extras:
+            payload.update(extras)
+        train.report(payload)
 
 
 def dynamic_resource_allocation(model_name: str, trial_params: Dict) -> Dict[str, float]:
@@ -227,7 +232,8 @@ def run_advanced_hyperparameter_optimization(
     enable_dashboard: bool = False,
     cpu_per_trial: float = 3,
     gpu_per_trial: float = 1/6,
-    storage_url: str = None
+    storage_url: str = None,
+    enable_tensorboard: bool = True,
 ):
     """Run advanced hyperparameter optimization with improvements"""
     
@@ -278,20 +284,28 @@ def run_advanced_hyperparameter_optimization(
         # Dynamic resource allocation
         resources = dynamic_resource_allocation(model_setup, selected_hyperparams)
         
-        def enhanced_callback_wrapper(val_loss, val_loss_min, model, epoch=0):
-            return enhanced_callback(val_loss, val_loss_min, model, epoch, metrics_history)
+        def enhanced_callback_wrapper(val_loss, val_loss_min, model, epoch=0, extras: dict = None):
+            return enhanced_callback(val_loss, val_loss_min, model, epoch, metrics_history, extras)
         
         # Update model config
         model_config["models"][0]["model_hyper_params"] = selected_hyperparams
         
         # Train with enhanced callback
-        return training.train_model(
+        result = training.train_model(
             model_config,
             eval_config,
             training_progress_callback=enhanced_callback_wrapper,
             data_path=data_path,
             data_path_overrides=data_path_overrides,
         )
+        # Report final metrics for analysis
+        if isinstance(result, dict):
+            train.report({
+                "val_loss": result.get("val_loss"),
+                "training_time": result.get("training_time"),
+                "model_params_millions": result.get("model_params_millions"),
+            })
+        return result
     
     # Initialize Ray if not already done
     if not ray.is_initialized():
@@ -330,6 +344,12 @@ def run_advanced_hyperparameter_optimization(
     if stopper is not None:
         tune_kwargs["stop"] = stopper
     
+    # Add TensorBoard logging if enabled
+    if enable_tensorboard:
+        tbx_cb = TBXLoggerCallback()
+        existing_cbs = tune_kwargs.get("callbacks") or []
+        tune_kwargs["callbacks"] = [*existing_cbs, tbx_cb]
+
     analysis = tune.run(trainable_name, **tune_kwargs)
     
     # Save results for future warm starting
@@ -340,7 +360,10 @@ def run_advanced_hyperparameter_optimization(
         with open(results_path, 'wb') as f:
             import pickle
             pickle.dump(results_data, f)
-        logger.info(f"Results saved to {results_path}")
+        # Also save CSV for quick inspection
+        csv_path = os.path.expanduser(f"~/ray_results/{trainable_name}_results.csv")
+        results_df.to_csv(csv_path, index=False)
+        logger.info(f"Results saved to {results_path} and {csv_path}")
     except Exception as e:
         logger.warning(f"Could not save results: {e}")
     
@@ -377,6 +400,8 @@ if __name__ == "__main__":
                        help="Enable Optuna dashboard with persistent storage")
     parser.add_argument("--storage-url", type=str, default=None,
                        help="Custom storage URL for Optuna (e.g., sqlite:///path/to/db.sqlite3)")
+    parser.add_argument("--enable-tensorboard", action="store_true",
+                       help="Enable TensorBoard logging for Ray Tune trials")
     
     args = parser.parse_args()
     
@@ -393,5 +418,6 @@ if __name__ == "__main__":
         cpu_per_trial=args.cpu_per_trial,
         max_concurrent=args.max_concurrent,
         enable_dashboard=args.enable_dashboard,
-        storage_url=args.storage_url
+        storage_url=args.storage_url,
+        enable_tensorboard=args.enable_tensorboard,
     )

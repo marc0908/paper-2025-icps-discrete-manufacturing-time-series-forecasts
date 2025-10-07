@@ -129,7 +129,7 @@ def duet_previous_good_params():
             "seq_len": 1600,
         },
     ]
-    return []
+    return good_params
 
 
 def crossformer_previous_good_params():

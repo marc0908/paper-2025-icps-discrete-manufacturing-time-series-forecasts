@@ -28,7 +28,10 @@ from ray.train import Checkpoint, CheckpointConfig
 
 import common
 import config
-import hyperparam_search_spaces
+try:
+    import improved_search_spaces as hyperparam_search_spaces
+except ImportError:
+    import hyperparam_search_spaces
 import training
 
 tfb_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "TFB"))
@@ -72,19 +75,19 @@ def parse_args():
     parser.add_argument(
         "--data-path",
         type=str,
-        default="datasets/pick_n_place_procedure_dataset.csv",
+        default="../dataset/pick_n_place_procedure_dataset.csv",
         help="Path to the main dataset CSV file.",
     )
     parser.add_argument(
         "--data-path-overrides",
         type=str,
-        default="datasets/pick_n_place_procedure_w_overrides.csv",
+        default="../dataset/pick_n_place_procedure_w_overrides.csv",
         help="Path to the dataset with overrides CSV file.",
     )
     return parser.parse_args()
 
 
-def callback(val_loss, val_loss_min, model):
+def callback(val_loss, val_loss_min, model, epoch=0, extras: dict = None):
     print("-> Callback. Validation loss:  %f" % (val_loss))
     if val_loss < val_loss_min:
         with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
@@ -93,29 +96,44 @@ def callback(val_loss, val_loss_min, model):
             print(model_file)
             checkpoint = Checkpoint.from_directory(temp_checkpoint_dir)
 
-            train.report({"val_loss": val_loss}, checkpoint=checkpoint)
+            payload = {"val_loss": val_loss, "epoch": epoch}
+            if extras:
+                payload.update(extras)
+            train.report(payload, checkpoint=checkpoint)
     else:
-        train.report({"val_loss": val_loss}, checkpoint=None)
+        payload = {"val_loss": val_loss, "epoch": epoch}
+        if extras:
+            payload.update(extras)
+        train.report(payload, checkpoint=None)
 
 
 def start_training(selected_hyperparams, model_config, evaluation_config, args):
 
     model_config["models"][0]["model_hyper_params"] = selected_hyperparams
-    training.train_model(
+    result = training.train_model(
         model_config,
         evaluation_config,
         training_progress_callback=callback,
         data_path=args.data_path,
         data_path_overrides=args.data_path_overrides,
     )
+    # Report final metrics for pruning/selection
+    if isinstance(result, dict):
+        train.report({
+            "val_loss": result.get("val_loss"),
+            "training_time": result.get("training_time"),
+            "model_params_millions": result.get("model_params_millions"),
+        })
 
 
 if __name__ == "__main__":
     args = parse_args()
 
-    eval_config, model_config, search_space = hyperparam_search_spaces.assemble_setup(
-        args.model_setup
-    )
+    # Prefer improved assembly if available
+    assemble = getattr(hyperparam_search_spaces, "improved_assemble_setup", None)
+    if assemble is None:
+        assemble = hyperparam_search_spaces.assemble_setup
+    eval_config, model_config, search_space = assemble(args.model_setup)
     model_config["models"][0]["input_sampling"] = 1
 
     scheduler = ASHAScheduler(
@@ -129,17 +147,19 @@ if __name__ == "__main__":
         metric="val_loss", mode="min", points_to_evaluate=previous_good_params
     )
 
-    ray.init()
+    if not ray.is_initialized():
+        ray.init()
 
+    sweep_name = args.sweep_name or f"{args.model_setup}_sweep"
     tune.register_trainable(
-        args.sweep_name,
+        sweep_name,
         lambda selected_hyperparams: start_training(
             selected_hyperparams, model_config, eval_config, args
         ),
     )
 
     analysis = tune.run(
-        args.sweep_name,
+        sweep_name,
         config=search_space,
         scheduler=scheduler,
         num_samples=args.num_samples,
@@ -165,3 +185,12 @@ if __name__ == "__main__":
         "Best hyperparameters: ",
         analysis.get_best_config(metric="val_loss", mode="min", scope="all"),
     )
+    # Save results to CSV for offline analysis
+    try:
+        out_dir = os.path.expanduser("~/ray_results")
+        os.makedirs(out_dir, exist_ok=True)
+        csv_path = os.path.join(out_dir, f"{sweep_name}_results.csv")
+        analysis.results_df.to_csv(csv_path, index=False)
+        print(f"Saved results CSV to {csv_path}")
+    except Exception as e:
+        print(f"Warning: failed to save results CSV: {e}")
