@@ -24,9 +24,7 @@ try:
     import tuning.improved_search_spaces as hyperparam_search_spaces
 except ImportError:
     import tuning.hyperparam_search_spaces
-import training
-import common
-import config
+from core import training, common, config
 
 
 def setup_logging():
