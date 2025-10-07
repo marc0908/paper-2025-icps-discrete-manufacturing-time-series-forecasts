@@ -21,9 +21,9 @@ from ray.tune.search import ConcurrencyLimiter
 # from ray.tune.stopper import MaximumIterationStopper  # Not needed
 
 try:
-    import improved_search_spaces as hyperparam_search_spaces
+    import tuning.improved_search_spaces as hyperparam_search_spaces
 except ImportError:
-    import hyperparam_search_spaces
+    import tuning.hyperparam_search_spaces
 import training
 import common
 import config
