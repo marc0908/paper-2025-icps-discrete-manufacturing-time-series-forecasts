@@ -309,7 +309,7 @@ def run_advanced_hyperparameter_optimization(
     if not ray.is_initialized():
         ray.init(
             runtime_env={
-                "working_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
+                "working_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")),
                 "env_vars": {
                     "PYTHONPATH": os.environ["PYTHONPATH"]
                 }
