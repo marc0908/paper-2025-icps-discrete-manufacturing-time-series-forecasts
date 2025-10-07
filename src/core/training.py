@@ -26,7 +26,7 @@ from ray.tune.search.bayesopt import BayesOptSearch
 from ray.tune.search.hyperopt import HyperOptSearch
 from ray.train import Checkpoint, CheckpointConfig
 
-import common
+from core import common
 
 tfb_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "TFB"))
 sys.path.append(tfb_path)

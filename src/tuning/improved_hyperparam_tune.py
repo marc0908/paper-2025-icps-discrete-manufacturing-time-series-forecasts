@@ -239,7 +239,7 @@ def run_advanced_hyperparameter_optimization(
     logger.info(f"Starting advanced hyperparameter optimization for {model_setup}")
     
     # Get model configuration
-    eval_config, model_config, search_space = hyperparam_search_spaces.assemble_setup(model_setup)
+    eval_config, model_config, search_space = hyperparam_search_spaces.improved_assemble_setup(model_setup)
     model_config["models"][0]["input_sampling"] = 1
     
     # Load previous results for warm starting if available
