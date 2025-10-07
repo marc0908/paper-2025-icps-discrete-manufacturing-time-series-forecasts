@@ -2,7 +2,7 @@
 Improved Search Spaces with Better Parameter Distributions and Ranges
 """
 from ray import tune
-import core.config
+from core import config
 
 
 def improved_timexer_searchspace():
