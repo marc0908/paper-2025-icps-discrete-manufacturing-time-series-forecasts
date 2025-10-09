@@ -11,34 +11,61 @@ the single-lookahead evaluation pipeline.
 import os
 import traceback
 import pandas as pd
+import glob
 from ray.tune import ExperimentAnalysis
 from paper_icps.core import common, config
 from paper_icps.evaluation import eval_common
 import paper_icps.evaluation.eval1_single_lookahead as eval_single
 import matplotlib
 
+import os
+import glob
+import pandas as pd
+from ray.tune import ExperimentAnalysis
+
+def load_all_experiments(experiment_dir, metric="val_loss", mode="min"):
+    """
+    Load all Ray Tune trials by scanning subfolders for result.json files,
+    combining their contents into a single DataFrame.
+    """
+    all_rows = []
+
+    # iterate over all trial subfolders
+    for trial_dir in glob.glob(os.path.join(experiment_dir, "TimeXer-Tuning_*")):
+        result_path = os.path.join(trial_dir, "result.json")
+        if not os.path.exists(result_path):
+            continue
+
+        try:
+            # Read result.json — may have multiple lines (each line = 1 iteration)
+            df = pd.read_json(result_path, lines=True)
+            if df.empty:
+                continue
+            # Keep only the last reported metric (latest training step)
+            last_row = df.tail(1).copy()
+            last_row["trial_id"] = os.path.basename(trial_dir).split("_")[1]
+            last_row["trial_dir"] = trial_dir
+            all_rows.append(last_row)
+        except Exception as e:
+            print(f"⚠️ Could not read {result_path}: {e}")
+
+    if not all_rows:
+        raise RuntimeError(f"No valid result.json files found in {experiment_dir}")
+
+    combined_df = pd.concat(all_rows, ignore_index=True)
+    combined_df = combined_df.sort_values(metric, ascending=(mode == "min"))
+    print(f"✅ Loaded {len(combined_df)} total trials from {experiment_dir}")
+    return combined_df
+
 def find_best_trials(experiment_dir, metric="val_loss", mode="min", top_k=3):
     """Load Ray Tune results and return the best trial checkpoints (Ray >=2.9 compatible)."""
-    from ray.tune import ExperimentAnalysis
-    analysis = ExperimentAnalysis(experiment_dir)
-    df = analysis.results_df.sort_values(metric, ascending=(mode == "min"))
+    df = load_all_experiments(experiment_dir).sort_values(metric, ascending=(mode == "min"))
     top_trials = df.head(top_k)
 
     best_trials = []
     for _, row in top_trials.iterrows():
-        trial_id = row.name  # e.g. 69af5d66
-
-        # Find the matching trial directory
-        matching_dirs = [
-            os.path.join(experiment_dir, d)
-            for d in os.listdir(experiment_dir)
-            if d.startswith(f"TimeXer-Tuning_{trial_id}")
-        ]
-        if not matching_dirs:
-            print(f"[⚠️] Trial directory not found for {trial_id}")
-            continue
-
-        trial_dir = max(matching_dirs, key=os.path.getmtime)
+        trial_id = row['trial_id']
+        trial_dir = row['trial_dir']
 
         # Find checkpoint folders
         ckpt_dirs = [
