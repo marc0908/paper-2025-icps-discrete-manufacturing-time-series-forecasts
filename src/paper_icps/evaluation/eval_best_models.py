@@ -31,7 +31,7 @@ def load_all_experiments(experiment_dir, metric="val_loss", mode="min"):
     all_rows = []
 
     # iterate over all trial subfolders
-    for trial_dir in glob.glob(os.path.join(experiment_dir, "TimeXer-Tuning_*")):
+    for trial_dir in glob.glob(os.path.join(experiment_dir, "*")):
         result_path = os.path.join(trial_dir, "result.json")
         if not os.path.exists(result_path):
             continue

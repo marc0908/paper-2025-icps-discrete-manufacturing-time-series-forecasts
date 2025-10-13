@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import warnings
+import math
 from typing import Dict, NoReturn
 
 # Deterministic behaviour for torch
@@ -250,6 +251,14 @@ def adjust_learning_rate(optimizer, epoch, args):
         }
     elif args.lradj == "constant":
         lr_adjust = {epoch: args.lr}
+    elif args.lradj == "cosine":
+        total_epochs = getattr(args, "num_epochs", 20)
+        lr = args.lr * (0.5 * (1 + math.cos(math.pi * epoch / total_epochs)))
+        lr_adjust = {epoch: lr}
+    else:
+        # Fallback: do nothing, keep previous LR
+        print(f"[Warning] Unknown lradj '{args.lradj}', keeping current LR.")
+        lr_adjust = {}
 
     if epoch in lr_adjust.keys():
         lr = lr_adjust[epoch]
@@ -317,8 +326,19 @@ def forecast_fit(model, train_dataset, validate_dataset, **kwargs) -> "ModelBase
     else:
         criterion = nn.HuberLoss(delta=0.5)
 
-    optimizer = optim.Adam(model.model.parameters(), lr=config.lr)
+    # Select optimizer based on config
+    opt_name = getattr(config, "optimizer", "adam").lower()
+    weight_decay = getattr(config, "weight_decay", 0.0)
 
+    if opt_name == "adam":
+        optimizer = optim.Adam(model.model.parameters(), lr=config.lr, weight_decay=weight_decay)
+    elif opt_name == "adamw":
+        optimizer = optim.AdamW(model.model.parameters(), lr=config.lr, weight_decay=weight_decay)
+    elif opt_name == "sgd":
+        optimizer = optim.SGD(model.model.parameters(), lr=config.lr, momentum=0.9, weight_decay=weight_decay)
+    else:
+        raise ValueError(f"Unsupported optimizer: {opt_name}")
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.early_stopping = common.EarlyStopping(patience=config.patience)
@@ -380,6 +400,10 @@ def forecast_fit(model, train_dataset, validate_dataset, **kwargs) -> "ModelBase
                 last_grad_norm = total_norm_sq ** 0.5
             except Exception:
                 last_grad_norm = None
+
+            # Clip gradients if enabled
+            if hasattr(config, "grad_clip") and config.grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(model.model.parameters(), config.grad_clip)
 
             optimizer.step()
             train_loss_sum += float(loss.item())

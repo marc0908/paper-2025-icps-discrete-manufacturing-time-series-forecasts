@@ -9,19 +9,26 @@ def improved_timexer_searchspace():
     """Enhanced TimeXer search space with better parameter distributions"""
     search_space = {
         # Core architecture parameters
-        "batch_size": tune.choice([32, 64, 128]),  # More conservative batch sizes
-        "d_model": tune.choice([64, 128, 256, 512]),
-        "d_ff": tune.choice([128, 256, 512, 1024, 2048]),  # Expanded range
+        "batch_size": tune.choice([16, 32, 64, 128, 256]),
+        "d_model": tune.choice([64, 128, 256, 384]),
+        "d_ff": tune.choice([128, 256, 512, 1024, 2048, 4096]),  # Expanded range
         "e_layers": tune.choice([1, 2, 3, 4]),  # Added 4 layers
         "n_heads": tune.choice([4, 8, 12, 16]),  # Powers of 2 for efficiency
         
+        # New: optimization strategy
+        "optimizer": tune.choice(["adam", "adamw", "sgd"]),
+        "weight_decay": tune.loguniform(1e-7, 1e-2),
+
+        # New: activation & normalization
+        "activation": tune.choice(["gelu", "relu", "silu", "elu"]),
+        "normalization": tune.choice(["layernorm", "batchnorm", "rmsnorm"]),
+
         # Regularization - using log-uniform for better exploration
-        "dropout": tune.loguniform(1e-4, 0.3),  # Log-uniform for better exploration
-        "weight_decay": tune.loguniform(1e-6, 1e-2),  # Important for generalization
+        "dropout": tune.loguniform(1e-6, 0.5),  # Log-uniform for better exploration
         
         # Learning parameters
-        "lr": tune.loguniform(1e-5, 1e-2),
-        "lradj": tune.choice(["type1", "type2", "cosine"]),  # More LR schedules
+        "lr": tune.loguniform(1e-6, 5e-2),
+        "lradj": tune.choice(["type1", "type2", "cosine", "none"]),  # More LR schedules
         
         # Model-specific parameters
         "patch_len": tune.choice([8, 16, 32, 64, 100, 200]),  # More granular choices

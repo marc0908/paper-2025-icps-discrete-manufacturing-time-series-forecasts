@@ -18,11 +18,16 @@ from ray.tune.search.hyperopt import HyperOptSearch
 from ray.tune.search.bayesopt import BayesOptSearch
 from ray.tune.search.optuna import OptunaSearch
 from ray.tune.search import ConcurrencyLimiter
-# from ray.tune.stopper import MaximumIterationStopper  # Not needed
+from ray.tune.stopper import Stopper
+from ray.tune import Tuner, TuneConfig, PlacementGroupFactory
+from ray.air import RunConfig, CheckpointConfig, FailureConfig
+
+from optuna.samplers import TPESampler
 
 from paper_icps.tuning import improved_search_spaces as hyperparam_search_spaces
 from paper_icps.core import training, common, config
 
+import numpy as np
 
 def setup_logging():
     """Setup comprehensive logging for debugging"""
@@ -38,20 +43,21 @@ def get_improved_scheduler(scheduler_type: str = "asha_improved") -> Any:
     schedulers = {
         "asha_improved": ASHAScheduler(
             max_t=config.max_epochs,
-            grace_period=20,  # Increased from 10 to allow more learning
-            reduction_factor=3,  # More conservative than 2
-            brackets=3,  # Multiple brackets for better exploration
+            grace_period=10,
+            reduction_factor=2,
+            brackets=1,
         ),
         "pbt": PopulationBasedTraining(
             time_attr="training_iteration",
             metric="val_loss",
             mode="min",  
-            perturbation_interval=20,
+            perturbation_interval=4,
             hyperparam_mutations={
                 "lr": lambda: tune.loguniform(1e-5, 1e-2).sample(),
                 "dropout": lambda: tune.uniform(0.0001, 0.2).sample(),
                 "batch_size": lambda: tune.choice([32, 64, 128]).sample(),
             },
+            resample_probability=0.2,
             custom_explore_fn=None,  # Use default exploration
         ),
         "asha_conservative": ASHAScheduler(
@@ -110,6 +116,7 @@ def get_advanced_search_algorithm(
             points_to_evaluate=points_to_evaluate,
             study_name=study_name,
             storage=optuna_storage,
+            sampler=TPESampler(multivariate=True, group=True, n_startup_trials=20)
         ),
         "bayesopt": BayesOptSearch(
             metric=metric,
@@ -140,19 +147,11 @@ def enhanced_callback(val_loss, val_loss_min, model, epoch, metrics_history, ext
     # Track metrics history for plateau detection
     metrics_history.append(val_loss)
     
-    # Enhanced checkpointing with metadata
+    # Enhanced checkpointing
     if val_loss < val_loss_min:
         with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
             model_file = os.path.join(temp_checkpoint_dir, "checkpoint.pt")
             common.save_model(model, model_file)
-            
-            # Save additional metadata
-            metadata = {
-                "epoch": epoch,
-                "val_loss": val_loss,
-                "improvement": val_loss_min - val_loss,
-                "metrics_history": metrics_history[-10:]  # Last 10 values
-            }
             
             checkpoint = Checkpoint.from_directory(temp_checkpoint_dir)
             payload = {
@@ -176,42 +175,9 @@ def enhanced_callback(val_loss, val_loss_min, model, epoch, metrics_history, ext
             payload.update(extras)
         train.report(payload)
 
-
-def dynamic_resource_allocation(model_name: str, trial_params: Dict) -> Dict[str, float]:
-    """Dynamically allocate resources based on model and parameters"""
-    base_cpu = 1.0
-    base_gpu = 1/3  # Default 1/3 GPU
-    
-    # Model-specific resource scaling
-    model_scaling = {
-        "timexer": {"cpu_mult": 1.2, "gpu_mult": 1.5},  # TimeXer is more resource intensive
-        "crossformer": {"cpu_mult": 1.1, "gpu_mult": 1.3},
-        "itransformer": {"cpu_mult": 1.0, "gpu_mult": 1.2},
-        "duet": {"cpu_mult": 1.3, "gpu_mult": 1.4},  # DUET has complex architecture
-        "dlinear": {"cpu_mult": 0.8, "gpu_mult": 0.7},  # Simpler model
-    }
-    
-    scaling = model_scaling.get(model_name, {"cpu_mult": 1.0, "gpu_mult": 1.0})
-    
-    # Parameter-based scaling
-    if trial_params.get("d_model", 128) > 256:
-        scaling["gpu_mult"] *= 1.2
-    if trial_params.get("d_ff", 256) > 512:
-        scaling["gpu_mult"] *= 1.1
-    if trial_params.get("batch_size", 64) > 64:
-        scaling["gpu_mult"] *= 1.1
-        
-    return {
-        "cpu": base_cpu * scaling["cpu_mult"],
-        "gpu": min(base_gpu * scaling["gpu_mult"], 1.0)  # Cap at 1 GPU
-    }
-
-
 def create_experiment_stopper():
-    """Create intelligent experiment stopper"""  
-    # Return None to disable stopper and rely on scheduler instead
-    return None
-
+    """Combine PlateauStopper with ASHA for adaptive early stopping."""
+    return PlateauStopper(patience=20, min_delta=1e-4)
 
 def run_advanced_hyperparameter_optimization(
     model_setup: str,
@@ -220,13 +186,13 @@ def run_advanced_hyperparameter_optimization(
     search_algo: str = "optuna",
     data_path: str = "../dataset/pick_n_place_procedure_dataset.csv",
     data_path_overrides: str = "../dataset/pick_n_place_procedure_w_overrides.csv",
-    max_concurrent: int = 5,
+    max_concurrent: int = 3,
     experiment_name: str = None,
     resume: bool = False,
     warm_start_path: str = None,
     enable_dashboard: bool = False,
-    cpu_per_trial: float = 8/5,
-    gpu_per_trial: float = 4/10,
+    cpu_per_trial: float = 8/3,
+    gpu_per_trial: float = 1,
     storage_url: str = None,
     enable_tensorboard: bool = True,
 ):
@@ -276,15 +242,14 @@ def run_advanced_hyperparameter_optimization(
     def enhanced_training_wrapper(selected_hyperparams):
         metrics_history = []
         
-        # Dynamic resource allocation
-        resources = dynamic_resource_allocation(model_setup, selected_hyperparams)
-        
         def enhanced_callback_wrapper(val_loss, val_loss_min, model, epoch=0, extras: dict = None):
             return enhanced_callback(val_loss, val_loss_min, model, epoch, metrics_history, extras)
         
         # Update model config
         model_config["models"][0]["model_hyper_params"] = selected_hyperparams
         
+        tune.utils.wait_for_gpu() # Wait for GPU Memory to be cleared
+
         # Train with enhanced callback
         result = training.train_model(
             model_config,
@@ -319,7 +284,7 @@ def run_advanced_hyperparameter_optimization(
         "scheduler": scheduler,
         "search_alg": search_algorithm,
         "num_samples": num_samples,
-        "resources_per_trial": {"cpu": cpu_per_trial, "gpu": gpu_per_trial},  # Configurable CPU per trial
+        #"resources_per_trial": {"cpu": cpu_per_trial, "gpu": gpu_per_trial},  # Configurable CPU per trial
         "metric": "val_loss",
         "mode": "min",
         "checkpoint_config": CheckpointConfig(
@@ -329,8 +294,8 @@ def run_advanced_hyperparameter_optimization(
         ),
         "resume": resume,
         "name": trainable_name,
-        "storage_path": os.path.expanduser("~/ray_results"),  # Use absolute path
-        "max_failures": 5,  # Allow some trial failures
+        "storage_path": os.path.expanduser("~/ray_results"),
+        "max_failures": 10, 
         "log_to_file": True,
         "verbose": 1,
     }
@@ -345,7 +310,41 @@ def run_advanced_hyperparameter_optimization(
         existing_cbs = tune_kwargs.get("callbacks") or []
         tune_kwargs["callbacks"] = [*existing_cbs, tbx_cb]
 
-    analysis = tune.run(trainable_name, **tune_kwargs)
+    placement = PlacementGroupFactory(
+        [{"CPU": cpu_per_trial, "GPU": gpu_per_trial}]
+    )
+
+    # Wrap your trainable to include these resources
+    trainable_with_resources = tune.with_resources(
+        enhanced_training_wrapper,
+        resources=placement
+    )
+
+    tuner = Tuner(
+        trainable_with_resources,
+        param_space=search_space,
+        tune_config=TuneConfig(
+            num_samples=num_samples,
+            scheduler=scheduler,
+            search_alg=search_algorithm,
+            metric="val_loss",
+            mode="min",
+            max_concurrent_trials=max_concurrent,
+        ),
+        run_config=RunConfig(
+            name=trainable_name,
+            storage_path=os.path.expanduser("~/ray_results"),
+            checkpoint_config=CheckpointConfig(
+                num_to_keep=3,
+                checkpoint_score_attribute="val_loss",
+                checkpoint_score_order="min",
+            ),
+            failure_config=FailureConfig(max_failures=5),
+            callbacks=[TBXLoggerCallback()] if enable_tensorboard else [],
+        ),
+    )
+
+    analysis = tuner.fit()
     
     # Save results for future warm starting
     results_path = os.path.expanduser(f"~/ray_results/{trainable_name}_results.pkl")
@@ -368,6 +367,35 @@ def run_advanced_hyperparameter_optimization(
     logger.info(f"Best trial final validation loss: {best_trial.last_result['val_loss']}")
     
     return analysis
+
+class PlateauStopper(Stopper):
+    """
+    Stops individual trials early if validation loss plateaus.
+    """
+    def __init__(self, patience=15, min_delta=1e-4, metric="val_loss"):
+        self.metric = metric
+        self.patience = patience
+        self.min_delta = min_delta
+        self.history = {}
+
+    def __call__(self, trial_id, result):
+        val = result.get(self.metric)
+        if val is None:
+            return False
+
+        hist = self.history.setdefault(trial_id, [])
+        hist.append(val)
+
+        if len(hist) > self.patience:
+            recent = np.array(hist[-self.patience:])
+            improvement = np.abs(recent[0] - recent[-1])
+            if improvement < self.min_delta:
+                print(f"PlateauStopper: {trial_id} stopped (Δ={improvement:.6f})")
+                return True
+        return False
+
+    def stop_all(self):
+        return False
 
 
 if __name__ == "__main__":
