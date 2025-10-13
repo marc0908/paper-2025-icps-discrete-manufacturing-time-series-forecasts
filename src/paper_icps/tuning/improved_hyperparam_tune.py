@@ -321,8 +321,9 @@ def run_advanced_hyperparameter_optimization(
     )
 
     # Dont use search algorithm if PBT is used
-    if scheduler.key == "pbt":
+    if isinstance(scheduler, PopulationBasedTraining):
         search_algorithm = None
+        logger.info("⚠️ Using PBT — disabling external search algorithm.")
 
     tuner = Tuner(
         trainable_with_resources,
