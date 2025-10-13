@@ -320,6 +320,10 @@ def run_advanced_hyperparameter_optimization(
         resources=placement
     )
 
+    # Dont use search algorithm if PBT is used
+    if scheduler.key == "pbt":
+        search_algorithm = None
+
     tuner = Tuner(
         trainable_with_resources,
         param_space=search_space,
