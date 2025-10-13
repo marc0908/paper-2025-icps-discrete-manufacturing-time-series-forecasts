@@ -327,8 +327,6 @@ def run_advanced_hyperparameter_optimization(
             num_samples=num_samples,
             scheduler=scheduler,
             search_alg=search_algorithm,
-            metric="val_loss",
-            mode="min",
             max_concurrent_trials=max_concurrent,
         ),
         run_config=RunConfig(
