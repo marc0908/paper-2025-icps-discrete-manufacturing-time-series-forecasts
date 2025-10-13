@@ -1,3 +1,6 @@
 [submodule "src/TFB"]
 	path = src/TFB
 	url = git@github.com:marc0908/TFB
+[submodule "src/paper_icps/TFB"]
+	path = src/paper_icps/TFB
+	url = https://github.com/marc0908/TFB.git
