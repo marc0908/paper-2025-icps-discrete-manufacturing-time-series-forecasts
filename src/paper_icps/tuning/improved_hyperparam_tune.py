@@ -38,10 +38,16 @@ def setup_logging():
     return logging.getLogger(__name__)
 
 
-def get_improved_scheduler(scheduler_type: str = "asha_improved") -> Any:
+def get_improved_scheduler(
+        scheduler_type: str = "asha_improved",
+        metric: str = "val_loss",
+        mode: str = "min",
+    ) -> Any:
     """Get improved scheduler configurations"""
     schedulers = {
         "asha_improved": ASHAScheduler(
+            metric=metric,
+            mode=mode,
             max_t=config.max_epochs,
             grace_period=10,
             reduction_factor=2,
@@ -49,8 +55,8 @@ def get_improved_scheduler(scheduler_type: str = "asha_improved") -> Any:
         ),
         "pbt": PopulationBasedTraining(
             time_attr="training_iteration",
-            metric="val_loss",
-            mode="min",  
+            metric=metric,
+            mode=mode,  
             perturbation_interval=4,
             hyperparam_mutations={
                 "lr": lambda: tune.loguniform(1e-5, 1e-2).sample(),
@@ -248,7 +254,7 @@ def run_advanced_hyperparameter_optimization(
         # Update model config
         model_config["models"][0]["model_hyper_params"] = selected_hyperparams
         
-        tune.utils.wait_for_gpu() # Wait for GPU Memory to be cleared
+        #tune.utils.wait_for_gpu() # Wait for GPU Memory to be cleared
 
         # Train with enhanced callback
         result = training.train_model(
