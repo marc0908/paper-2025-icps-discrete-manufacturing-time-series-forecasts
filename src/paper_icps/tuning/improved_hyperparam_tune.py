@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional, List
 
 import ray
 from ray import tune, train
-from ray.train import Checkpoint, CheckpointConfig
+from ray.train import Checkpoint, CheckpointConfig, get_context
 from ray.tune.schedulers import ASHAScheduler, PopulationBasedTraining
 from ray.tune.logger import TBXLoggerCallback
 from ray.tune.search.hyperopt import HyperOptSearch
@@ -21,6 +21,7 @@ from ray.tune.search import ConcurrencyLimiter
 from ray.tune.stopper import Stopper
 from ray.tune import Tuner, TuneConfig, PlacementGroupFactory
 from ray.air import RunConfig, CheckpointConfig, FailureConfig
+from tensorboardX import SummaryWriter
 
 from optuna.samplers import TPESampler
 
@@ -247,32 +248,70 @@ def run_advanced_hyperparameter_optimization(
     # Enhanced training function with metrics tracking
     def enhanced_training_wrapper(selected_hyperparams):
         metrics_history = []
-        
-        def enhanced_callback_wrapper(val_loss, val_loss_min, model, epoch=0, extras: dict = None):
-            return enhanced_callback(val_loss, val_loss_min, model, epoch, metrics_history, extras)
-        
-        # Update model config
-        model_config["models"][0]["model_hyper_params"] = selected_hyperparams
-        
-        #tune.utils.wait_for_gpu() # Wait for GPU Memory to be cleared
 
-        # Train with enhanced callback
-        result = training.train_model(
-            model_config,
-            eval_config,
-            training_progress_callback=enhanced_callback_wrapper,
-            data_path=data_path,
-            data_path_overrides=data_path_overrides,
-        )
-        # Report final metrics for analysis
-        if isinstance(result, dict):
-            train.report({
-                "val_loss": result.get("val_loss"),
-                "training_time": result.get("training_time"),
-                "model_params_millions": result.get("model_params_millions"),
-            })
-        return result
-    
+        # --- TB Writer anlegen im Trial-Logdir:
+        trial_dir = get_context().get_trial_dir() if get_context() else os.getcwd()
+        writer = SummaryWriter(log_dir=trial_dir)
+
+        # --- HParams einmalig loggen (erscheint im HParams-Plugin):
+        # Achtung: metric_dict braucht mind. einen Eintrag – initial 0.
+        hparam_dict = {
+            "d_model": selected_hyperparams.get("d_model"),
+            "d_ff": selected_hyperparams.get("d_ff"),
+            "e_layers": selected_hyperparams.get("e_layers"),
+            "batch_size": selected_hyperparams.get("batch_size"),
+            "lr": selected_hyperparams.get("lr"),
+            "dropout": selected_hyperparams.get("dropout"),
+            # ... ergänze was für dich wichtig ist
+        }
+        writer.add_hparams(hparam_dict, {"val_loss/last": 0.0})
+
+        # --- “Status”-Scalars: 1 = running, 0 = finished
+        writer.add_scalar("status/running", 1, 0)
+        writer.flush()
+            
+        def enhanced_callback_wrapper(val_loss, val_loss_min, model, epoch=0, extras: dict = None):
+            # Standard-Report
+            result = enhanced_callback(val_loss, val_loss_min, model, epoch, metrics_history, extras)
+
+            # Zusätzlich hübsch gruppierte Scalars:
+            writer.add_scalar("loss/val", float(val_loss), epoch)
+            writer.add_scalar("loss/best_so_far", float(val_loss_min), epoch)
+            if extras:
+                # z. B. Lernrate oder Durchsatz mitschreiben:
+                if "lr" in extras: writer.add_scalar("optim/lr", float(extras["lr"]), epoch)
+                if "throughput" in extras: writer.add_scalar("perf/throughput", float(extras["throughput"]), epoch)
+            writer.flush()
+            return result
+        
+        try:
+            # Update model config
+            model_config["models"][0]["model_hyper_params"] = selected_hyperparams
+            
+            #tune.utils.wait_for_gpu() # Wait for GPU Memory to be cleared
+
+            # Train with enhanced callback
+            result = training.train_model(
+                model_config,
+                eval_config,
+                training_progress_callback=enhanced_callback_wrapper,
+                data_path=data_path,
+                data_path_overrides=data_path_overrides,
+            )
+            # Report final metrics for analysis
+            if isinstance(result, dict):
+                train.report({
+                    "val_loss": result.get("val_loss"),
+                    "training_time": result.get("training_time"),
+                    "model_params_millions": result.get("model_params_millions"),
+                })
+            return result
+        finally:
+            # Auf “terminated” schalten, damit man im TB sieht, welche fertig sind:
+            writer.add_scalar("status/running", 0, 999999)
+            writer.flush()
+            writer.close()
+
     # Initialize Ray if not already done
     if not ray.is_initialized():
             ray.init(runtime_env={"working_dir": os.getcwd()})
