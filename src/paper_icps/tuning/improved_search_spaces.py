@@ -75,9 +75,9 @@ def improved_timexer_searchspace():
     """Enhanced TimeXer search space with better parameter distributions"""
     search_space = {
         # Core architecture parameters
-        "batch_size": tune.choice([16, 32,]), #64, 128, 256]), # smaller batch sizes due to memory restrictions
+        "batch_size": tune.choice([16, 32, 64, 128, 256]),
         "d_model": tune.choice([64, 128, 256, 512]),
-        "d_ff": tune.choice([128, 256, 512, 1024,]), #2048, 4096]),  # Expanded range
+        "d_ff": tune.choice([128, 256, 512, 1024, 2048, 4096]),  # Expanded range
         "e_layers": tune.choice([1, 2, 3, 4, 5]),  # Added 5 layers
         "n_heads": tune.choice([4, 8, 12, 16]),  # Powers of 2 for efficiency
         
