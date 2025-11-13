@@ -37,6 +37,7 @@ from paper_icps.core import common
 #os.environ["PYTHONPATH"] = tfb_path
 from paper_icps.TFB.ts_benchmark.data import data_source
 from paper_icps.TFB.ts_benchmark.models.model_loader import get_models
+from paper_icps.TFB.ts_benchmark.models.model_base import ModelBase
 
 
 class CustomDatasetWithOverrides(Dataset):
@@ -267,7 +268,7 @@ def adjust_learning_rate(optimizer, epoch, args):
         print("Updating learning rate to {}".format(lr))
 
 
-def forecast_fit(model, train_dataset, validate_dataset, **kwargs) -> "ModelBase":
+def forecast_fit(model, train_dataset, validate_dataset, **kwargs) -> ModelBase:
 
     if model.model is None:
         raise ValueError("Model not trained. Call the fit() function first.")
@@ -357,8 +358,8 @@ def forecast_fit(model, train_dataset, validate_dataset, **kwargs) -> "ModelBase
         last_grad_norm = None
         if kwargs.get("random_time_offset_per_epoch", False):
             time_offset = np.random.randint(2**14, size=1)[0]
-            train_data_loader.dataset.time_offset = time_offset
-            valid_data_loader.dataset.time_offset = time_offset
+            train_data_loader.dataset.time_offset = time_offset # type: ignore
+            valid_data_loader.dataset.time_offset = time_offset # type: ignore
 
         model.model.train()
         for i, (input, target, input_mark, target_mark) in enumerate(train_data_loader):
