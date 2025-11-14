@@ -1,7 +1,7 @@
 import gc
 import math
 import time
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Protocol, cast, Callable
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Protocol, cast, Callable
 
 import numpy as np
 import torch
@@ -11,7 +11,6 @@ from torch.utils.data import Dataset, DataLoader
 
 from ..core import common
 from ..TFB.ts_benchmark.models.model_loader import get_models
-from ..TFB.ts_benchmark.models.model_base import ModelBase
 
 class ForecastingModel(Protocol):
     """

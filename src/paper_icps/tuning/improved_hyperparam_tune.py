@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional, List
 
 import ray
 from ray import tune, train
-from ray.train import Checkpoint, CheckpointConfig, get_context
+from ray.train import Checkpoint, get_context
 from ray.tune.schedulers import ASHAScheduler, PopulationBasedTraining
 from ray.tune.logger import TBXLoggerCallback
 from ray.tune.search.hyperopt import HyperOptSearch
@@ -25,8 +25,8 @@ from tensorboardX import SummaryWriter
 
 from optuna.samplers import TPESampler
 
-from paper_icps.tuning import improved_search_spaces as hyperparam_search_spaces
-from paper_icps.core import training, common, config
+from ..tuning import improved_search_spaces as hyperparam_search_spaces
+from ..core import training, common, config
 
 import numpy as np
 

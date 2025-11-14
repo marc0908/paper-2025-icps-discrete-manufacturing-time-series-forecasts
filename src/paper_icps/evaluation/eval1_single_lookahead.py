@@ -1,15 +1,7 @@
-import math
-import os
-import random
-import sys
-
 import numpy as np
-import pandas as pd
-import torch
 
-import paper_icps.core.common as common
-import paper_icps.core.config as config
-import paper_icps.evaluation.eval_common as eval_common
+from ..core import common, config
+import eval_common
 
 
 def eval_model(model_name, modelpath, data, n_runs=100):
