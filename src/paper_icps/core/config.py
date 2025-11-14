@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 # Global training defaults
@@ -26,7 +26,7 @@ def default_eval_config() -> Dict[str, Any]:
 
 def model_config(
     model_name: str,
-    model_adaptor: str | None = None,
+    model_adaptor: Optional[str] = None,
     **overrides: Any,
 ) -> Dict[str, Any]:
     """
@@ -82,6 +82,7 @@ BASE_DEFAULTS: Dict[str, Any] = {
 
 # DUET shared base configuration
 DUET_BASE = {
+    **BASE_DEFAULTS,
     "CI": 1,
     "batch_size": 64,
     "d_ff": 256,
@@ -95,19 +96,21 @@ DUET_BASE = {
     "n_heads": 6,
     "num_experts": 9,
     "patch_len": 200,
-} | BASE_DEFAULTS  # Python 3.9+ dict merge
+}
 
 
 PREVIOUS_GOOD_PARAMS: Dict[str, List[Dict[str, Any]]] = {
     "duet": [
-        DUET_BASE | {"lradj": "type3", "moving_avg": 1},
-        DUET_BASE | {"lradj": "type3", "moving_avg": 3},
-        DUET_BASE | {"lradj": "type1", "moving_avg": 1},
-        DUET_BASE | {"lradj": "type1", "moving_avg": 3},
+        {**DUET_BASE, "lradj": "type3", "moving_avg": 1},
+        {**DUET_BASE, "lradj": "type3", "moving_avg": 3},
+        {**DUET_BASE, "lradj": "type1", "moving_avg": 1},
+        {**DUET_BASE, "lradj": "type1", "moving_avg": 3},
     ],
 
     "crossformer": [
         {
+            **BASE_DEFAULTS,
+            "lradj": "type3",
             "batch_size": 64,
             "d_ff": 128,
             "d_model": 256,
@@ -119,13 +122,13 @@ PREVIOUS_GOOD_PARAMS: Dict[str, List[Dict[str, Any]]] = {
             "n_heads": 15,
             "seg_len": 200,
         }
-        | BASE_DEFAULTS
-        | {"lradj": "type3"},
         # If you want to re-enable alternative presets, add more dicts here.
     ],
 
     "itransformer": [
         {
+            **BASE_DEFAULTS,
+            "lradj": "type1",
             "batch_size": 32,
             "d_ff": 256,
             "d_model": 64,
@@ -136,12 +139,12 @@ PREVIOUS_GOOD_PARAMS: Dict[str, List[Dict[str, Any]]] = {
             "n_heads": 1,
             "period_len": 100,
         }
-        | BASE_DEFAULTS
-        | {"lradj": "type1"},
     ],
 
     "dlinear": [
         {
+            **BASE_DEFAULTS,
+            "lradj": "type1",
             "batch_size": 32,
             "d_ff": 128,
             "d_model": 256,
@@ -149,12 +152,12 @@ PREVIOUS_GOOD_PARAMS: Dict[str, List[Dict[str, Any]]] = {
             "lr": 0.0001377110270953509,
             "moving_avg": 3,
         }
-        | BASE_DEFAULTS
-        | {"lradj": "type1"},
     ],
 
     "patchtst": [
         {
+            **BASE_DEFAULTS,
+            "lradj": "type1",
             "batch_size": 64,
             "d_ff": 128,
             "d_model": 64,
@@ -165,8 +168,6 @@ PREVIOUS_GOOD_PARAMS: Dict[str, List[Dict[str, Any]]] = {
             "n_heads": 18,
             "patch_len": 16,
         }
-        | BASE_DEFAULTS
-        | {"lradj": "type1"},
     ],
 
     "pdf": [
@@ -187,14 +188,12 @@ PREVIOUS_GOOD_PARAMS: Dict[str, List[Dict[str, Any]]] = {
             "stride": [4],
             "train_epochs": MAX_EPOCHS,
             # Keep pdf-specific keys as in the original config
-        }
-        | {
             # Pdf also uses these generic forecasting settings
             "horizon": 400,
             "seq_len": 1600,
             "norm": True,
             "patience": 10,
-        },
+        }
     ],
 }
 

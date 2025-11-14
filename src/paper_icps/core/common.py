@@ -3,7 +3,7 @@ import os
 import pickle
 import random
 from pathlib import Path
-from typing import Optional, Tuple, IO, Any
+from typing import Optional, Tuple, IO, Any, Union
 
 import numpy as np
 import pandas as pd
@@ -52,7 +52,7 @@ COLUMNS_TO_USE = [
 
 
 def load_csv(
-        file_path: str,
+        file_path: Union[str, Path],
         freq_hz: int = 100,
         start_time: str = "2024-02-01"
 ) -> pd.DataFrame:
