@@ -1,6 +1,11 @@
 # Deep Learning-based Time Series Forecasting for Industrial Discrete Process Data
 
-This repository contains the dataset and source code accompanying the publication available at  https://ieeexplore.ieee.org/document/11087869 .
+This repository is a fork of  
+https://github.com/JRC-ISIA/paper-2025-icps-discrete-manufacturing-time-series-forecasts,  
+which provides the dataset and source code accompanying the publication:  
+https://ieeexplore.ieee.org/document/11087869
+
+This fork is developed in the context of a bachelor thesis and extends the original work with additional forecasting models, improved hyperparameter tuning, and expanded evaluation scenarios.
 
 ## Dataset
 
@@ -34,6 +39,8 @@ The source code is licensed under the terms of the MIT license.
 # Acknowledgement
 
 We would like to thank the authors of the following published code:
+
+https://github.com/JRC-ISIA/paper-2025-icps-discrete-manufacturing-time-series-forecasts
 
 https://github.com/decisionintelligence/TFB
 
