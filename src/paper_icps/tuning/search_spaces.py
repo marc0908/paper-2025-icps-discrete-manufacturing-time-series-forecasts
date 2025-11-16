@@ -4,7 +4,7 @@ Improved Search Spaces with Better Parameter Distributions and Ranges
 from ray import tune
 from paper_icps.core import config
 
-def improved_timexer_searchspace():
+def timexer_searchspace():
     """Enhanced TimeXer search space with better parameter distributions"""
     search_space = {
         # Core architecture parameters
@@ -51,7 +51,7 @@ def improved_timexer_searchspace():
     return search_space
 
 
-def improved_duet_searchspace():
+def duet_searchspace():
     """Enhanced DUET search space"""
     search_space = {
         "CI": 1,  # Channel independent - fixed
@@ -93,7 +93,7 @@ def improved_duet_searchspace():
     return search_space
 
 
-def improved_crossformer_searchspace():
+def crossformer_searchspace():
     """Enhanced Crossformer search space"""
     search_space = {
         "batch_size": tune.choice([32, 64, 128]),
@@ -129,7 +129,7 @@ def improved_crossformer_searchspace():
     return search_space
 
 
-def improved_itransformer_searchspace():
+def itransformer_searchspace():
     """Enhanced iTransformer search space"""
     search_space = {
         "batch_size": tune.choice([32, 64, 128]),
@@ -164,7 +164,7 @@ def improved_itransformer_searchspace():
     return search_space
 
 
-def improved_dlinear_searchspace():
+def dlinear_searchspace():
     """Enhanced DLinear search space"""
     search_space = {
         "batch_size": tune.choice([32, 64, 128, 256]),  # DLinear can handle larger batches
@@ -193,36 +193,8 @@ def improved_dlinear_searchspace():
     return search_space
 
 
-def get_conditional_search_space(model_name: str, base_search_space: dict):
-    """Add conditional hyperparameters based on other parameters"""
-    
-    # Example: Make some parameters conditional on others
-    if model_name in ["timexer", "crossformer"]:
-        # Conditional learning rate based on model size
-        def conditional_lr(config):
-            base_lr = config["lr"]
-            if config["d_model"] > 256:
-                return base_lr * 0.8  # Reduce LR for larger models
-            return base_lr
-        
-        # This would require more advanced conditional logic in Ray Tune
-        # For now, we'll use the improved static spaces
-    
-    return base_search_space
-
-
-def multi_fidelity_search_space(base_space: dict, fidelity_param: str = "num_epochs"):
-    """Add multi-fidelity support to search space"""
-    multi_fidelity_space = base_space.copy()
-    
-    # Add fidelity parameter
-    multi_fidelity_space[fidelity_param] = tune.randint(10, config.max_epochs)
-    
-    return multi_fidelity_space
-
-
 # Updated assembly function with improved search spaces
-def improved_assemble_setup(setup_name):
+def assemble_setup(setup_name):
     """Assemble setup with improved search spaces"""
     setups = {
         "duet": (
@@ -230,33 +202,33 @@ def improved_assemble_setup(setup_name):
             config.model_config(
                 "duet.DUET", decoder_input_required=False, has_loss_importance=True
             ),
-            improved_duet_searchspace(),
+            duet_searchspace(),
         ),
         "crossformer": (
             config.default_eval_config(),
             config.model_config(
                 "time_series_library.Crossformer", "transformer_adapter"
             ),
-            improved_crossformer_searchspace(),
+            crossformer_searchspace(),
         ),
         "itransformer": (
             config.default_eval_config(),
             config.model_config(
                 "time_series_library.iTransformer", "transformer_adapter"
             ),
-            improved_itransformer_searchspace(),
+            itransformer_searchspace(),
         ),
         "timexer": (
             config.default_eval_config(),
             config.model_config(
                 "timexer.TimeXer", decoder_input_required=True, has_loss_importance=False
             ),
-            improved_timexer_searchspace(),
+            timexer_searchspace(),
         ),
         "dlinear": (
             config.default_eval_config(),
             config.model_config("time_series_library.DLinear", "transformer_adapter"),
-            improved_dlinear_searchspace(),
+            dlinear_searchspace(),
         ),
     }
 
