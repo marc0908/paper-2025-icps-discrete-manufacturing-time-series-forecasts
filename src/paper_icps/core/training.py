@@ -468,7 +468,7 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
 
         # Randomize global time offset for datasets (shifts time marks)
         if kwargs.get("random_time_offset_per_epoch", False):
-            time_offset = np.random.randint(2**14, size=1)[0]
+            time_offset = int(np.random.randint(2**14, size=1)[0])
             train_data_loader.dataset.time_offset = time_offset  # type: ignore
             valid_data_loader.dataset.time_offset = time_offset  # type: ignore
 
