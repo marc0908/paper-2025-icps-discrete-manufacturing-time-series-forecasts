@@ -10,7 +10,7 @@ the single-lookahead evaluation pipeline.
 
 import traceback
 from ..core import common
-import eval1_single_lookahead as eval_single
+from .eval1_single_lookahead import eval_model
 import matplotlib
 
 import os
@@ -126,7 +126,7 @@ def evaluate_best_models(experiment_name, data_path, top_k=3, n_runs=100):
               f"dropout={trial['config'].get('config/dropout', 0):.4f}")
 
         try:
-            result_row = eval_single.eval_model(
+            result_row = eval_model(
                 f"Trial_{i}", model_path, data, n_runs=n_runs
             )
             results[f"Trial_{i}"] = result_row

@@ -1,7 +1,8 @@
 import numpy as np
 
 from ..core import common, config
-import eval_common
+from .eval_common import forecast_and_stats, plot_generated_tight, create_mae_mse_table_row, parse_args, print_latex_table_average_only
+
 
 def find_trajectory_override_ranges(arr):
     override_val = np.max(arr)
@@ -62,7 +63,7 @@ def eval_model(modelname, modelpath, data, n_runs):
         trajectory_starts.append(trajectory_start)
         in_data = test_data[trajectory_start:].values
 
-        if test_data["Override"][trajectory_start + lookback_len - 1] != 1:
+        if test_data["Override"].iloc[trajectory_start + lookback_len - 1] != 1:
             print("Warning: Override not in lookback, no forecast possible.")
             breakpoint()
 
@@ -91,7 +92,7 @@ def eval_model(modelname, modelpath, data, n_runs):
             )
             print(override_start_range)
 
-        stat, generated = eval_common.forecast_and_stats(model, in_data, n_recursion)
+        stat, generated = forecast_and_stats(model, in_data, n_recursion)
         generated_results.append(generated)
         stats_avgs.append(stat["avg"])
         stats_per_variable.append(stat["per_variable"])
@@ -116,7 +117,7 @@ def eval_model(modelname, modelpath, data, n_runs):
     upper_quartile_idx = stats_avgs_sorted_idx[int(stats_avgs_len * 0.75)]
     upper_quartile_mae = stats_avgs[upper_quartile_idx, :][0]
 
-    eval_common.plot_generated_tight(
+    plot_generated_tight(
         test_data,
         generated_results[lower_quartile_idx],
         trajectory_starts[lower_quartile_idx],
@@ -128,7 +129,7 @@ def eval_model(modelname, modelpath, data, n_runs):
         desc=f"MAE={lower_quartile_mae:.3f}",
         markOverride=True,
     )
-    eval_common.plot_generated_tight(
+    plot_generated_tight(
         test_data,
         generated_results[upper_quartile_idx],
         trajectory_starts[upper_quartile_idx],
@@ -140,13 +141,13 @@ def eval_model(modelname, modelpath, data, n_runs):
         markOverride=True,
     )
 
-    return eval_common.create_mae_mse_table_row(
+    return create_mae_mse_table_row(
         test_data.columns, stats_per_variable, stats_avgs
     )
 
 
 if __name__ == "__main__":
-    args = eval_common.parse_args()
+    args = parse_args()
 
     data_w_overrides = common.load_csv(args.data_path)
     results = {}
@@ -155,4 +156,4 @@ if __name__ == "__main__":
         result_row = eval_model(model_name, model_path, data_w_overrides, args.nruns)
         results[model_name] = result_row
 
-    eval_common.print_latex_table_average_only(data_w_overrides, results)
+    print_latex_table_average_only(data_w_overrides, results)

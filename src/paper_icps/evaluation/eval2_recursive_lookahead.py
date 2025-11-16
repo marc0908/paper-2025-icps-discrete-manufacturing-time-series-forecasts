@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as pyplot
 
 from ..core import common, config
-import eval_common
+from .eval_common import forecast_and_stats, create_mae_table_row, parse_args
 
 def print_latex_table(data, results, stepsize=1):
     def format_values(mean_val, std_val):
@@ -64,7 +64,7 @@ def eval_model(modelname, modelpath, data, n_runs=10000):
 
     for trajectory_start_idx in trajectory_starts:
         in_data = test_data[trajectory_start_idx:].values
-        stat, generated = eval_common.forecast_and_stats(model, in_data, n_recursion)
+        stat, generated = forecast_and_stats(model, in_data, n_recursion)
         generated_results.append(generated)
         stats_avgs.append(stat["avg"])
         stats_per_variable.append(stat["per_variable"])
@@ -86,7 +86,7 @@ def eval_model(modelname, modelpath, data, n_runs=10000):
     median_runs = mae_vals_sorted[:, n_runs // 2]
     up_quart_runs = mae_vals_sorted[:, (3 * n_runs) // 4]
 
-    return eval_common.create_mae_table_row(mae_means, mae_stds), (
+    return create_mae_table_row(mae_means, mae_stds), (
         low_quart_runs,
         median_runs,
         up_quart_runs,
@@ -140,7 +140,7 @@ def plot_stats(stats):
 
 
 if __name__ == "__main__":
-    args = eval_common.parse_args()
+    args = parse_args()
     data = common.load_csv(args.data_path)
 
     results = {}

@@ -1,7 +1,7 @@
 import numpy as np
 
 from ..core import common, config
-import eval_common
+from .eval_common import forecast_and_stats, plot_generated_tight, create_mae_mse_table_row, parse_args, print_latex_table
 
 
 def eval_model(model_name, modelpath, data, n_runs=100):
@@ -40,7 +40,7 @@ def eval_model(model_name, modelpath, data, n_runs=100):
 
     for trajectory_start_idx in trajectory_starts:
         in_data = test_data[trajectory_start_idx:].values
-        stat, generated = eval_common.forecast_and_stats(model, in_data, n_recursion)
+        stat, generated = forecast_and_stats(model, in_data, n_recursion)
         generated_results.append(generated)
         stats_avgs.append(stat["avg"])
         stats_per_variable.append(stat["per_variable"])
@@ -57,7 +57,7 @@ def eval_model(model_name, modelpath, data, n_runs=100):
     print("Lowest MAE:", lowest_mae, "MSE:", lowest_mse, "at index:", lowest_idx)
     print("Highest MAE:", highest_mae, "MSE:", highest_mse, "at index:", highest_idx)
 
-    eval_common.plot_generated_tight(
+    plot_generated_tight(
         test_data,
         generated_results[lowest_idx],
         trajectory_starts[lowest_idx],
@@ -68,7 +68,7 @@ def eval_model(model_name, modelpath, data, n_runs=100):
         show_xlabel=False,
         desc="\\textbf{Min MAE}" + f" ({lowest_mae:.3f})",
     )
-    eval_common.plot_generated_tight(
+    plot_generated_tight(
         test_data,
         generated_results[highest_idx],
         trajectory_starts[highest_idx],
@@ -78,13 +78,13 @@ def eval_model(model_name, modelpath, data, n_runs=100):
         showtitles=False,
         desc="\\textbf{Max MAE}" + f" ({highest_mae:.3f})",
     )
-    return eval_common.create_mae_mse_table_row(
+    return create_mae_mse_table_row(
         test_data.columns, stats_per_variable, stats_avgs
     )
 
 
 if __name__ == "__main__":
-    args = eval_common.parse_args()
+    args = parse_args()
 
     data = common.load_csv(args.data_path)
     results = {}
@@ -92,4 +92,4 @@ if __name__ == "__main__":
     for model_name, model_path in args.model:
         result_row = eval_model(model_name, model_path, data, n_runs=args.nruns)
         results[model_name] = result_row
-    eval_common.print_latex_table(data, results)
+    print_latex_table(data, results)
