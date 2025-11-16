@@ -6,14 +6,32 @@ build-backend = "setuptools.build_meta"
 name = "paper_icps"
 version = "0.1.0"
 description = "Deep Learning-based Time Series Forecasting for Industrial Discrete Process Data"
-authors = [{ name = "Marc Toiflhart" }, { name = "Manuel Bielak" }, { name = "Olaf Sasnick" }]
+authors = [
+    { name = "Marc Toiflhart" },
+    { name = "Manuel Bielak" },
+    { name = "Olaf Sasnick" }
+]
 requires-python = ">=3.10"
+
 dependencies = [
-    "torch",
-    "ray[tune]",
-    "optuna",
-    "pandas",
-    "matplotlib",
+    "dash==3.2.0",
+    "dash_bootstrap_components==2.0.4",
+    "einops==0.8.1",
+    "Flask==3.1.2",
+    "matplotlib==3.10.7",
+    "numpy==2.3.4",
+    "optuna==4.5.0",
+    "pandas==2.3.3",
+    "ray[tune]==2.49.2",
+    "reformer_pytorch==1.4.4",
+    "rpy2==3.6.4",
+    "scikit_learn==1.7.2",
+    "scipy==1.16.3",
+    "statsmodels==0.14.5",
+    "sympy==1.14.0",
+    "tensorboardx==2.6.4",
+    "torch==2.1.2+cu118",
+    "tqdm==4.67.1"
 ]
 
 [tool.setuptools.packages.find]

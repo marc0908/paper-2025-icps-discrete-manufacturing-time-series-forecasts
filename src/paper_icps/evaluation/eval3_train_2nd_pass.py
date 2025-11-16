@@ -1,26 +1,13 @@
 import argparse
 import datetime
-import io
 import os
-import pickle
-import pdb
-import sys
 import time
 
 import numpy as np
-import pandas as pd
 import torch
-from sklearn.utils import resample
 from torch.utils.data import Dataset
 
-import common
-import config
-import training
-
-tfb_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "TFB"))
-sys.path.append(tfb_path)
-from ts_benchmark.data import data_source
-from ts_benchmark.models.model_loader import get_model_info
+from ..core import common, config, training
 
 
 def parse_args():
@@ -189,8 +176,8 @@ if __name__ == "__main__":
         data_w_overrides, tv_ratio, train_ratio_in_tv
     )
 
-    n_generated_train = len(train_data) // args.reduction_factor
-    n_generated_valid = len(valid_data) // args.reduction_factor
+    n_generated_train = int(len(train_data) // args.reduction_factor)
+    n_generated_valid = int(len(valid_data) // args.reduction_factor)
 
     rng = np.random.default_rng(seed=seed)
 
