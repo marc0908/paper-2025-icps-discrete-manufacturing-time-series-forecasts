@@ -221,7 +221,7 @@ def assemble_setup(setup_name):
         "timexer": (
             config.default_eval_config(),
             config.model_config(
-                "timexer.TimeXer", decoder_input_required=True, has_loss_importance=False
+                "time_series_library.TimeXer", decoder_input_required=True, has_loss_importance=False
             ),
             timexer_searchspace(),
         ),

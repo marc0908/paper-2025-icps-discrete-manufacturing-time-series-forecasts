@@ -10,7 +10,7 @@ from torch import optim
 from torch.utils.data import Dataset, DataLoader
 
 from ..core import common
-from ..TFB.ts_benchmark.models.model_loader import get_models
+from ..forecasting.models.model_loader import get_models
 
 class ForecastingModel(Protocol):
     """
