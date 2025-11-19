@@ -1,3 +1,6 @@
 [submodule "src/paper_icps/TFB"]
 	path = src/paper_icps/TFB
 	url = https://github.com/marc0908/TFB.git
+[submodule "src/paper_icps/Time-Series-Library"]
+	path = src/paper_icps/Time-Series-Library
+	url = https://github.com/marc0908/Time-Series-Library.git

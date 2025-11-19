@@ -122,7 +122,7 @@ PREVIOUS_GOOD_PARAMS: Dict[str, List[Dict[str, Any]]] = {
             "n_heads": 15,
             "seg_len": 200,
         }
-        # If you want to re-enable alternative presets, add more dicts here.
+        # Re-enable alternative presets --> more dicts here.
     ],
 
     "itransformer": [
