@@ -8,6 +8,8 @@ MAX_EPOCHS = 150
 # Backwards-compatible alias
 max_epochs = MAX_EPOCHS
 
+MAX_EPOCHS_TUNE = 30
+max_epochs_tune = MAX_EPOCHS_TUNE
 
 def default_eval_config() -> Dict[str, Any]:
     """
