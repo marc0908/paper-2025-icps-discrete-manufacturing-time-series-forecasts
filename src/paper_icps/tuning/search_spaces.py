@@ -272,7 +272,7 @@ def assemble_setup(setup_name: str):
         "crossformer": (
             base_eval_cfg,
             config.model_config(
-                "time_series_library.Crossformer", "transformer_adapter"
+                "paper_icps.tslib.models.Crossformer.Model", "transformer_adapter"
             ),
             crossformer_searchspace(),
         ),
