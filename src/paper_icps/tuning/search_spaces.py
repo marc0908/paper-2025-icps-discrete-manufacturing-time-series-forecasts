@@ -247,6 +247,51 @@ def dlinear_searchspace():
     return search_space
 
 
+def timemixer_searchspace():
+    search_space = {
+        # === Core architecture ===
+        # d_model is small in paper (16 / 32 / 128 depending on dataset)
+        "d_model": tune.choice([16, 32, 64, 128, 256]),
+        
+        # Number of PDM blocks L (paper uses L=2, ablations show benefits for L=2–4)
+        "e_layers": tune.choice([1, 2, 3, 4]),
+
+        # Number of scales M (paper uses M=1 for short-term, M=3 for long-term)
+        "num_scales": tune.choice([1, 2, 3, 4]),
+
+        # Feedforward width (not explicit; derive as multiples of d_model)
+        "d_ff_mult": tune.choice([2, 4, 8, 16]),  # d_ff = d_model * multiplier
+
+        # === Learning parameters ===
+        # Paper uses ADAM LR=1e-2 or 1e-3 depending on dataset
+        "lr": tune.loguniform(1e-4, 3e-2),
+
+        # weight decay is not used, aber kann helfen
+        "weight_decay": tune.loguniform(1e-8, 1e-3),
+
+        # === Regularization ===
+        "dropout": tune.uniform(0.0, 0.3),  # paper uses small dropout
+        "moving_avg": tune.choice([1, 3, 5, 7]),  # based on appendix
+
+        # === Optimization and stabilization ===
+        "batch_size": tune.choice([16, 32, 64, 128]),
+        "grad_clip": tune.uniform(0.5, 2.0),
+
+        "down_sampling_window": tune.choice([2, 4, 8]),
+        "channel_independence": tune.choice([True, False]),
+
+        # === Fixed — based on your global pipeline ===
+        "seq_len": 1600,
+        "horizon": 400,
+        "loss": "MSE",
+        "norm": True,
+        "num_epochs": config.max_epochs,
+        "patience": tune.choice([10, 15, 20]),
+    }
+
+    return search_space
+
+
 
 def assemble_setup(setup_name: str):
     """Assemble setup with improved search spaces"""
@@ -309,6 +354,19 @@ def assemble_setup(setup_name: str):
             ),
             timesnet_searchspace(num_vars=num_vars),
         ),
+        "timemixer": (
+            base_eval_cfg,
+            config.model_config(
+                "paper_icps.tslib.models.TimeMixer.Model",
+                "transformer_adapter",
+                decoder_input_required=True,
+                has_loss_importance=False,
+            ),
+            timemixer_searchspace(),
+        ),
     }
 
-    return setups.get(setup_name, setups["timexer"])
+    setup = setups.get(setup_name)
+    if not setup:
+        raise ValueError(f"Unknown setup name: {setup_name}")
+    return setup
