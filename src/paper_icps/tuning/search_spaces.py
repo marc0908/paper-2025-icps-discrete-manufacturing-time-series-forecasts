@@ -3,6 +3,7 @@ Improved Search Spaces with Better Parameter Distributions and Ranges
 """
 from ray import tune
 from paper_icps.core import config
+import math
 
 def timexer_searchspace():
     """Enhanced TimeXer search space with better parameter distributions"""
@@ -50,6 +51,59 @@ def timexer_searchspace():
     }
     return search_space
 
+def timesnet_searchspace(num_vars: int | None = None):
+    """
+    TimesNet search space for long-term multivariate forecasting.
+
+    Follows the paper:
+    - shallow depth (2–3 TimesBlocks)
+    - moderate d_model (32–512)
+    - small top_k (3–5)
+    - lr around 1e-4, small dropout, Adam, MSE
+    """
+    # If we know the channel count, use the paper's rule d_model ≈ 2^{ceil(log2 C)}
+    if num_vars is not None and num_vars > 0:
+        base = 2 ** math.ceil(math.log2(num_vars))
+    else:
+        # Fallback prior if we don't know C
+        base = 64
+
+    # Candidate d_model values around the "base", clamped to [32, 512]
+    d_model_candidates = sorted(
+        {max(32, min(base * m, 512)) for m in [1, 2, 4, 8]}
+    )
+    # Make sure we only keep sane values
+    d_model_candidates = [d for d in d_model_candidates if 32 <= d <= 512]
+
+    search_space = {
+        # === Capacity ===
+        "d_model": tune.choice(d_model_candidates or [64, 128, 256, 512]),
+        # TimesNet uses 2 layers for most forecasting tasks; try 2–3 only.
+        "e_layers": tune.choice([2, 3]),
+        # top-k frequencies in FFT; paper shows low sensitivity for k ≤ 5
+        "top_k": tune.choice([3, 5]),
+        # FFN / conv width (simple multiples of d_model)
+        "d_ff": tune.choice([128, 256, 512, 1024]),
+
+        # === Optimization & regularization ===
+        # Centered around 1e-4 as in the paper, with ~×3 range
+        "lr": tune.loguniform(3e-5, 3e-4),
+        "dropout": tune.uniform(0.05, 0.20),
+        "weight_decay": tune.loguniform(1e-6, 1e-3),
+        "batch_size": tune.choice([16, 32, 64]),
+
+        # === Fixed / training control ===
+        "loss": "MSE",
+        "horizon": 400,        # adjust if your eval_config uses something else
+        "seq_len": 1600,       # same as other models in your setup
+        "norm": True,
+        "num_epochs": config.max_epochs,
+        "patience": tune.choice([5, 10, 15]),
+        "moving_avg": tune.choice([1, 3, 5, 7]),
+        "grad_clip": tune.uniform(0.5, 2.0),
+    }
+
+    return search_space
 
 def duet_searchspace():
     """Enhanced DUET search space"""
@@ -193,43 +247,68 @@ def dlinear_searchspace():
     return search_space
 
 
-# Updated assembly function with improved search spaces
-def assemble_setup(setup_name):
+
+def assemble_setup(setup_name: str):
     """Assemble setup with improved search spaces"""
+    # Base eval config
+    base_eval_cfg = config.default_eval_config()
+
+    # If your eval config exposes the number of variables/channels,
+    # you can pass it into timesnet_searchspace for a slightly smarter prior.
+    num_vars = None
+    for key in ["num_features", "n_features", "n_vars", "num_vars"]:
+        if key in base_eval_cfg:
+            num_vars = base_eval_cfg[key]
+            break
+
     setups = {
         "duet": (
-            config.default_eval_config(),
+            base_eval_cfg,
             config.model_config(
                 "duet.DUET", decoder_input_required=False, has_loss_importance=True
             ),
             duet_searchspace(),
         ),
         "crossformer": (
-            config.default_eval_config(),
+            base_eval_cfg,
             config.model_config(
                 "time_series_library.Crossformer", "transformer_adapter"
             ),
             crossformer_searchspace(),
         ),
         "itransformer": (
-            config.default_eval_config(),
+            base_eval_cfg,
             config.model_config(
                 "time_series_library.iTransformer", "transformer_adapter"
             ),
             itransformer_searchspace(),
         ),
         "timexer": (
-            config.default_eval_config(),
+            base_eval_cfg,
             config.model_config(
-                "time_series_library.TimeXer", decoder_input_required=True, has_loss_importance=False
+                "time_series_library.TimeXer",
+                decoder_input_required=True,
+                has_loss_importance=False,
             ),
             timexer_searchspace(),
         ),
         "dlinear": (
-            config.default_eval_config(),
-            config.model_config("time_series_library.DLinear", "transformer_adapter"),
+            base_eval_cfg,
+            config.model_config(
+                "time_series_library.DLinear", "transformer_adapter"
+            ),
             dlinear_searchspace(),
+        ),
+        "timesnet": (
+            base_eval_cfg,
+            config.model_config(
+                "paper_icps.tslib.models.TimesNet.Model",
+                "transformer_adapter",
+                decoder_input_required=True,
+                has_loss_importance=False,
+            ),
+            timesnet_searchspace(num_vars=num_vars),
         ),
     }
 
-    return setups.get(setup_name, setups["timexer"])  # Default to timexer if not found
+    return setups.get(setup_name, setups["timexer"])

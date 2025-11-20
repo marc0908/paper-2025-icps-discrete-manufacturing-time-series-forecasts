@@ -309,6 +309,43 @@ class CustomDatasetWithOverrides(Dataset):
 
         return seq_lookback, seq_lookahead, seq_lookback_mark, seq_lookahead_mark
 
+def _adapt_time_marks_for_temporal_embedding(
+    nn_model: nn.Module,
+    input_mark: torch.Tensor,
+    target_mark: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    For models like TimesNet (and some TSL transformers) that use a Linear
+    temporal embedding expecting multiple calendar features per timestep,
+    adapt our [B, T, 1] marks to the expected in_features.
+
+    If the model has enc_embedding.temporal_embedding.embed as nn.Linear
+    with in_features > 1, we repeat the scalar mark along the last axis.
+    Otherwise we just cast to float.
+    """
+    try:
+        enc_emb = getattr(nn_model, "enc_embedding", None)
+        te = getattr(enc_emb, "temporal_embedding", None)
+        lin = getattr(te, "embed", None) if te is not None else None
+
+        if isinstance(lin, nn.Linear):
+            in_feat = lin.in_features
+            # Our dataset currently provides [B, T, 1]; expand if more features expected
+            if input_mark.size(-1) == 1 and in_feat > 1:
+                input_mark = input_mark.float().repeat(1, 1, in_feat)
+                target_mark = target_mark.float().repeat(1, 1, in_feat)
+            else:
+                input_mark = input_mark.float()
+                target_mark = target_mark.float()
+        else:
+            input_mark = input_mark.float()
+            target_mark = target_mark.float()
+    except Exception:
+        # Be defensive: on any weird attribute layout, just ensure float dtype
+        input_mark = input_mark.float()
+        target_mark = target_mark.float()
+
+    return input_mark, target_mark
 
 # ---------------------------------------------------------------------------
 # Learning rate schedule (from TFB)
@@ -481,6 +518,11 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
             input_mark = input_mark.to(device)
             target_mark = target_mark.to(device)
 
+            # Adapt time marks for models with temporal Linear embeddings (e.g. TimesNet)
+            input_mark, target_mark = _adapt_time_marks_for_temporal_embedding(
+                nn_model, input_mark, target_mark
+            )
+
             loss_importance: Optional[torch.Tensor] = None  # reset every batch
 
             # Forward pass branch depending on model config
@@ -639,6 +681,10 @@ def train_model(
     lookback = model_config["models"][0]["model_hyper_params"]["seq_len"]
     horizon = evaluation_config["strategy_args"]["horizon"]
     lookahead = horizon
+
+    # Ensure TimesNet / TSL models see the right pred_len
+    # (safe for other models; extra attr is just ignored if unused)
+    setattr(model.config, "pred_len", horizon)
 
     train_ratio_in_tv = evaluation_config["strategy_args"]["train_ratio_in_tv"]
     tv_ratio = evaluation_config["strategy_args"]["tv_ratio"]  # train+val fraction

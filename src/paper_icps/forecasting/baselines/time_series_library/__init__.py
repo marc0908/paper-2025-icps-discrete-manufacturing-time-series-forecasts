@@ -3,7 +3,8 @@ from .adapters_for_transformers import (
     Crossformer,
     iTransformer,
     DLinear,
+    TimesNet,
     transformer_adapter
 )
 
-__all__ = ["TimeXer", "Crossformer", "iTransformer", "DLinear", "transformer_adapter"]
+__all__ = ["TimeXer", "Crossformer", "iTransformer", "DLinear", "TimesNet","transformer_adapter"]
