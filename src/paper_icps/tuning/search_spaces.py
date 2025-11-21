@@ -272,6 +272,74 @@ def nonstationary_transformer_searchspace(num_vars: int | None = None):
 
     return search_space
 
+def informer_searchspace(num_vars: int | None = None):
+    """
+    Informer search space for long-term multivariate forecasting.
+
+    Based on:
+    - 3-layer encoder + 2-layer decoder in the paper (we center around 2–4 enc layers)
+    - d_model ≈ 512, heads ∈ {8,16}, dropout ≈ 0.1
+    - Adam with lr ≈ 1e-4, batch size ≈ 32
+    """
+
+    # If you want to adapt d_model a bit to channel count you *can*,
+    # but Informer uses a fairly large fixed model (512) across datasets.
+    if num_vars is not None and num_vars > 0:
+        # Very mild scaling, but keep it in [256, 512]
+        base = min(512, max(256, 32 * ((num_vars + 31) // 32)))
+        d_model_candidates = sorted({256, base, 512})
+    else:
+        d_model_candidates = [256, 512]
+
+    search_space = {
+        # === Capacity ===
+        # Encoder depth: paper uses 3–4 layers; we keep it modest for your long sequences.
+        "d_model": tune.choice(d_model_candidates),
+        "e_layers": tune.choice([2, 3, 4]),       # encoder layers
+        # Decoder layers usually 2 in the paper; keep it small but tunable if your impl uses d_layers
+        "d_layers": tune.choice([1, 2]),
+
+        # ProbSparse attention factor c (paper uses c=5)
+        "factor": tune.choice([3, 5, 7]),
+
+        # Feedforward width (paper uses inner size 2048 with d_model=512)
+        "d_ff": tune.choice([512, 1024, 2048]),
+
+        # Multi-head attention: 8 or 16 heads in the paper
+        "n_heads": tune.choice([8, 16]),
+
+        # Distilling: paper uses distilling; allow tuning it
+        "distil": tune.choice([True, False]),
+
+        # === Optimization & regularization ===
+        # LR centered around 1e-4 with decay
+        "lr": tune.loguniform(3e-5, 3e-4),
+        "dropout": tune.uniform(0.05, 0.25),
+        "weight_decay": tune.loguniform(1e-6, 1e-3),
+
+        "batch_size": tune.choice([16, 32, 64]),
+
+        # Activation is GELU in the official impl
+        "activation": "gelu",
+
+        # Learning-rate adjustment strategy – reuse your existing options
+        "lradj": tune.choice(["type1", "type2", "cosine", "none"]),
+
+        # === Fixed / pipeline-aligned ===
+        "loss": "MSE",          # Informer uses MSE 
+        "horizon": 400,         # adjust if your eval config uses something else
+        "seq_len": 1600,        # aligned with your other models
+        "norm": True,
+        "num_epochs": config.max_epochs,
+        "patience": tune.choice([5, 10, 15]),
+        "moving_avg": tune.choice([1, 3, 5, 7]),
+
+        # Gradient clipping for stability on long sequences
+        "grad_clip": tune.uniform(0.5, 2.0),
+    }
+
+    return search_space
+
 def crossformer_searchspace():
     """Enhanced Crossformer search space"""
     search_space = {
@@ -508,6 +576,16 @@ def assemble_setup(setup_name: str):
                 has_loss_importance=False,
             ),
             fedformer_searchspace(),
+        ),
+        "informer": (
+            base_eval_cfg,
+            config.model_config(
+                "paper_icps.tslib.models.Informer.Model",
+                "transformer_adapter",
+                decoder_input_required=True,   # Informer uses encoder-decoder
+                has_loss_importance=False,
+            ),
+            informer_searchspace(num_vars=num_vars),
         ),
     }
 

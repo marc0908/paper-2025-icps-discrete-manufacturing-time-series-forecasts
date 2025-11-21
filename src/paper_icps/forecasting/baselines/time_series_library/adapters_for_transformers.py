@@ -179,6 +179,7 @@ from paper_icps.tslib.models.TimesNet import Model as TimesNetModel
 from paper_icps.tslib.models.TimeMixer import Model as TimeMixerModel
 from paper_icps.tslib.models.Nonstationary_Transformer import Model as NonStationaryModel
 from paper_icps.tslib.models.FEDformer import Model as FEDformerModel
+from paper_icps.tslib.models.Informer import Model as InformerModel
 
 
 TimeXer = transformer_adapter(TimeXerModel)
@@ -189,3 +190,4 @@ TimesNet = transformer_adapter(TimesNetModel)
 TimeMixer = transformer_adapter(TimeMixerModel)
 NonStationary = transformer_adapter(NonStationaryModel)
 FEDformer = transformer_adapter(FEDformerModel)
+Informer = transformer_adapter(InformerModel)
