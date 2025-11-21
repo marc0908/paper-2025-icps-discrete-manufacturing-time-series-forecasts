@@ -51,6 +51,76 @@ def timexer_searchspace():
     }
     return search_space
 
+def fedformer_searchspace():
+    """
+    Hyperparameter search space for FEDformer (Fourier Enhanced Decomposed Transformer),
+    based strictly on the paper FEDformer (Zhou et al., 2022).
+    """
+
+    return {
+        # ===== Core architecture =====
+        # Encoder/Decoder layers (paper uses N=2, M=1 or similar small depth)
+        "e_layers": tune.choice([1, 2, 3]),
+        "d_layers": tune.choice([1, 2]),
+
+        # Hidden dimension D — Table figs suggest 64–512 depending on dataset
+        "d_model": tune.choice([64, 128, 256, 512]),
+
+        # FFN width — multiples of d_model shown in architecture
+        "d_ff": tune.choice([256, 512, 1024, 2048]),
+
+        # Attention heads — typical 4–8 for these model sizes
+        "n_heads": tune.choice([4, 8]),
+
+        # ===== Frequency domain parameters =====
+        # Number of Fourier/Wavelet modes (Section 4.3 + Figure 6) — default M=64
+        "modes": tune.choice([16, 32, 64, 96, 128]),
+
+        # Fourier or Wavelet block
+        # FEB-f / FEB-w and FEA-f / FEA-w as per Section 3.2 / 3.3
+        "domain": tune.choice(["fourier", "wavelet"]),
+
+        # Wavelet levels L (Appendix D)
+        "wavelet_levels": tune.choice([2, 3, 4]),
+
+        # Activation for frequency attention (Section 3.2 FEA-f)
+        "fea_activation": tune.choice(["softmax", "tanh"]),
+
+        # ===== Mixture-of-Experts Seasonal-Trend Decomposition =====
+        # Based on MOEDecomp (Section 3.4)
+        "num_experts": tune.choice([3, 4, 5, 6]),
+
+        # kernel sizes from Appendix F.5: [7, 12, 14, 24, 48]
+        "expert_kernel_sizes": tune.choice([
+            [7, 12, 14, 24, 48],
+            [7, 14, 24],
+            [12, 24, 48],
+        ]),
+
+        # ===== Learning & Training =====
+        "batch_size": tune.choice([16, 32, 64]),
+
+        # Paper uses Adam with lr=1e-4 (Appendix F.2) — allow small variation
+        "lr": tune.loguniform(3e-5, 3e-4),
+
+        # For stability, match TimesNet defaults
+        "weight_decay": tune.loguniform(1e-6, 1e-3),
+
+        # Dropout — paper uses small dropout (0.05–0.1)
+        "dropout": tune.uniform(0.0, 0.2),
+
+        # ===== Fixed for your pipeline =====
+        "horizon": 400,
+        "seq_len": 1600,
+        "loss": "MSE",
+        "norm": True,
+
+        # ===== Stability parameters =====
+        "grad_clip": tune.uniform(0.5, 2.0),
+        "patience": tune.choice([5, 10, 15]),
+        "moving_avg": tune.choice([1, 3, 5]),
+    }
+
 def timesnet_searchspace(num_vars: int | None = None):
     """
     TimesNet search space for long-term multivariate forecasting.
@@ -428,6 +498,16 @@ def assemble_setup(setup_name: str):
                 has_loss_importance=False,
             ),
             nonstationary_transformer_searchspace(num_vars=num_vars),
+        ),
+        "fedformer": (
+            base_eval_cfg,
+            config.model_config(
+                "paper_icps.tslib.models.FEDformer.Model",
+                "transformer_adapter",
+                decoder_input_required=True,
+                has_loss_importance=False,
+            ),
+            fedformer_searchspace(),
         ),
     }
 
