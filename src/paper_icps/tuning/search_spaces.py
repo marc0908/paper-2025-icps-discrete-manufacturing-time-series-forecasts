@@ -121,6 +121,63 @@ def fedformer_searchspace():
         "moving_avg": tune.choice([1, 3, 5]),
     }
 
+def autoformer_searchspace(num_vars: int | None = None):
+    """
+    Autoformer search space for long-term multivariate forecasting.
+
+    Based on:
+    - d_model = 512, 2 encoder layers, 1 decoder layer in the paper
+    - moving_avg window k = 25
+    - Adam, lr ~ 1e-4, L2 loss, batch_size = 32, early stop ~10 epochs  [oai_citation:0‡Autoformer.pdf](sediment://file_000000005f3871f4bd01b92c9dbf9c2f)
+    """
+
+    # If we know channel count, bias d_model around a power of 2 close to C
+    if num_vars is not None and num_vars > 0:
+        base = 2 ** math.ceil(math.log2(num_vars))
+    else:
+        base = 64
+
+    d_model_candidates = sorted(
+        {max(32, min(base * m, 512)) for m in [1, 2, 4, 8]}
+    )
+    d_model_candidates = [d for d in d_model_candidates if 32 <= d <= 512]
+
+    search_space = {
+        # === Capacity / architecture ===
+        "d_model": tune.choice(d_model_candidates or [128, 256, 512]),
+        # Paper: 2 encoder, 1 decoder layer; we keep it shallow
+        "e_layers": tune.choice([2, 3]),
+        "d_layers": tune.choice([1, 2]),
+        # FFN width – modest multiples of d_model
+        "d_ff": tune.choice([256, 512, 1024]),
+        "n_heads": tune.choice([4, 8]),
+
+        # decomposition (moving average) window – around k=25 in the paper  [oai_citation:1‡Autoformer.pdf](sediment://file_000000005f3871f4bd01b92c9dbf9c2f)
+        "moving_avg": tune.choice([7, 13, 25, 49]),
+
+        # Auto-Correlation hyper-parameter c (Top-k periods: k = c * log L)  [oai_citation:2‡Autoformer.pdf](sediment://file_000000005f3871f4bd01b92c9dbf9c2f)
+        "c": tune.randint(1, 4),   # {1, 2, 3}
+
+        # === Optimization & regularization ===
+        # Centered around 1e-4 as in the paper, with a modest range  [oai_citation:3‡Autoformer.pdf](sediment://file_000000005f3871f4bd01b92c9dbf9c2f)
+        "lr": tune.loguniform(3e-5, 3e-4),
+        "dropout": tune.uniform(0.05, 0.25),
+        "weight_decay": tune.loguniform(1e-6, 1e-3),
+        "batch_size": tune.choice([16, 32, 64]),
+
+        # === Fixed / training control ===
+        "loss": "MSE",            # L2 in the paper
+        "horizon": 400,
+        "seq_len": 1600,
+        "norm": True,
+        "num_epochs": config.max_epochs,
+        # paper early-stops within ~10 epochs; keep similar scale  [oai_citation:4‡Autoformer.pdf](sediment://file_000000005f3871f4bd01b92c9dbf9c2f)
+        "patience": tune.choice([5, 10, 15]),
+        "grad_clip": tune.uniform(0.5, 2.0),
+    }
+
+    return search_space
+
 def timesnet_searchspace(num_vars: int | None = None):
     """
     TimesNet search space for long-term multivariate forecasting.
@@ -484,6 +541,54 @@ def timemixer_searchspace():
 
     return search_space
 
+def etsformer_searchspace():
+    """
+    ETSformer search space for long-term multivariate forecasting.
+
+    Paper defaults:
+      - e_layers = 2, decoder_stacks = 2
+      - d_model = 512, d_ff = 2048
+      - n_heads = 8
+      - K in {0,1,2,3}
+      - L (lookback) in {96,192,336,720}
+      - lr in [1e-5, 1e-3]
+    We keep the architecture close to the paper and mainly tune capacity &
+    optimization, while adapting to your global seq_len/horizon.
+    """
+
+    search_space = {
+        # === Capacity / architecture ===
+        # Keep depth paper-like; optionally allow 3 encoder layers
+        "d_model": tune.choice([256, 512]),
+        "d_ff": tune.choice([1024, 2048, 4096]),
+        "e_layers": tune.choice([2, 3]),          # encoder layers
+        "decoder_stacks": tune.choice([1, 2]),    # decoder stacks (paper: 2)
+        "n_heads": 8,                             # fixed as in paper
+        "conv_kernel_size": 3,                    # embedding kernel size
+
+        # Number of frequencies for Frequency Attention
+        "K": tune.choice([0, 1, 2, 3]),           # paper’s grid
+
+        # === Optimization & regularization ===
+        # Around paper grid {1e-3,...,1e-5}, but log-uniform
+        "lr": tune.loguniform(3e-5, 3e-3),
+        "dropout": tune.uniform(0.1, 0.3),        # paper ~0.2, small band
+        "weight_decay": tune.loguniform(1e-7, 1e-3),
+        "batch_size": tune.choice([16, 32, 64]),  # paper 32
+
+        # === Fixed / training control (aligned with your framework) ===
+        "loss": "MSE",
+        "horizon": 400,
+        "seq_len": 1600,
+        "norm": True,
+        "num_epochs": config.max_epochs,
+        "patience": tune.choice([5, 10, 15]),
+        "moving_avg": tune.choice([1, 3, 5, 7]),
+        "grad_clip": tune.uniform(0.5, 2.0),
+    }
+
+    return search_space
+
 
 
 def assemble_setup(setup_name: str):
@@ -586,6 +691,26 @@ def assemble_setup(setup_name: str):
                 has_loss_importance=False,
             ),
             informer_searchspace(num_vars=num_vars),
+        ),
+        "autoformer": (
+            base_eval_cfg,
+            config.model_config(
+                "paper_icps.tslib.models.Autoformer.Model",
+                "transformer_adapter",
+                decoder_input_required=True,
+                has_loss_importance=False,
+            ),
+            autoformer_searchspace(num_vars=num_vars),
+        ),
+        "etsformer": (
+            base_eval_cfg,
+            config.model_config(
+                "paper_icps.tslib.models.ETSformer.Model",
+                "transformer_adapter",
+                decoder_input_required=True,
+                has_loss_importance=False,
+            ),
+            etsformer_searchspace(),
         ),
     }
 

@@ -180,6 +180,8 @@ from paper_icps.tslib.models.TimeMixer import Model as TimeMixerModel
 from paper_icps.tslib.models.Nonstationary_Transformer import Model as NonStationaryModel
 from paper_icps.tslib.models.FEDformer import Model as FEDformerModel
 from paper_icps.tslib.models.Informer import Model as InformerModel
+from paper_icps.tslib.models.Autoformer import Model as AutoformerModel
+from paper_icps.tslib.models.ETSformer import Model as ETSformerModel
 
 
 TimeXer = transformer_adapter(TimeXerModel)
@@ -191,3 +193,5 @@ TimeMixer = transformer_adapter(TimeMixerModel)
 NonStationary = transformer_adapter(NonStationaryModel)
 FEDformer = transformer_adapter(FEDformerModel)
 Informer = transformer_adapter(InformerModel)
+Autoformer = transformer_adapter(AutoformerModel)
+ETSformer = transformer_adapter(ETSformerModel)
