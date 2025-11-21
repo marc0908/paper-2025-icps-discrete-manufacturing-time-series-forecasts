@@ -33,7 +33,8 @@ from paper_icps.core import training, common, config
 
 import numpy as np
 
-# Tuning epoch budgets (can be moved into config.py if you prefer)
+# TODO: Move to Config
+# Tuning epoch budgets
 MAX_EPOCHS_COARSE = 30   # cheap, fast exploration
 MAX_EPOCHS_FINE   = 150   # more training for fine stage
 
@@ -610,7 +611,7 @@ def run_hyperparameter_optimization(
 
     # If PBT is used, search algorithm must be None
     if isinstance(scheduler, PopulationBasedTraining):
-        logger.info("⚠️ Using PBT — disabling external search algorithm.")
+        logger.info("Using PBT — disabling external search algorithm.")
         search_algorithm = None
 
     
@@ -634,6 +635,7 @@ def run_hyperparameter_optimization(
             name=trainable_name,
             storage_path=ray_dir,
             stop=stopper,
+            verbose=2,
             checkpoint_config=CheckpointConfig(
                 num_to_keep=3,
                 checkpoint_score_attribute="val_loss",

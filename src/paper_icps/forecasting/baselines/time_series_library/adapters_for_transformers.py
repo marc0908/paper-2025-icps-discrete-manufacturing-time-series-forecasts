@@ -177,6 +177,7 @@ from paper_icps.tslib.models.iTransformer import Model as iTransformerModel
 from paper_icps.tslib.models.DLinear import Model as DLinearModel
 from paper_icps.tslib.models.TimesNet import Model as TimesNetModel
 from paper_icps.tslib.models.TimeMixer import Model as TimeMixerModel
+from paper_icps.tslib.models.Nonstationary_Transformer import Model as NonStationaryModel
 
 TimeXer = transformer_adapter(TimeXerModel)
 Crossformer = transformer_adapter(CrossformerModel)
@@ -184,3 +185,4 @@ iTransformer = transformer_adapter(iTransformerModel)
 DLinear = transformer_adapter(DLinearModel)
 TimesNet = transformer_adapter(TimesNetModel)
 TimeMixer = transformer_adapter(TimeMixerModel)
+NonStationary = transformer_adapter(NonStationaryModel)

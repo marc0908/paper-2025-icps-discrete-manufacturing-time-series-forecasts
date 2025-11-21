@@ -146,6 +146,61 @@ def duet_searchspace():
     }
     return search_space
 
+def nonstationary_transformer_searchspace(num_vars: int | None = None):
+    """
+    Search space for Non-stationary Transformer (vanilla Transformer backbone
+    wrapped with Series Stationarization + De-stationary Attention).
+
+    - Centered around the paper's config: d_model=512, e_layers=2, lr=1e-4.
+    - Slight flexibility in depth/width.
+    """
+
+    # heuristic for d_model based on channel count, similar to TimesNet
+    if num_vars is not None and num_vars > 0:
+        base = 2 ** math.ceil(math.log2(num_vars))
+    else:
+        base = 64
+
+    d_model_candidates = sorted(
+        {max(64, min(base * m, 512)) for m in [1, 2, 4, 8]}
+    )
+    d_model_candidates = [d for d in d_model_candidates if 64 <= d <= 512]
+
+    search_space = {
+        # === Capacity ===
+        "d_model": tune.choice(d_model_candidates or [128, 256, 512]),
+        "e_layers": tune.choice([2, 3]),      # paper: 2 encoder layers
+        "d_layers": 1,                        # keep decoder shallow
+        "n_heads": tune.choice([4, 8]),       # 8 heads matches paper
+
+        # FFN width as independent choices (simpler than coupling to d_model)
+        "d_ff": tune.choice([512, 1024, 2048, 4096]),
+
+        # === Non-stationary projector ===
+        "proj_hidden_dim": tune.choice([64, 128, 256]),
+        "proj_hidden_layers": 2,             # fixed as in the paper
+
+        # === Optimization & regularization ===
+        "lr": tune.loguniform(3e-5, 3e-4),   # around 1e-4
+        "weight_decay": tune.loguniform(1e-6, 1e-3),
+        "dropout": tune.uniform(0.05, 0.25),
+        "grad_clip": tune.uniform(0.5, 2.0),
+
+        # === Training control ===
+        "batch_size": tune.choice([16, 32, 64]),
+        "patience": tune.choice([5, 10, 15]),
+        "moving_avg": tune.choice([1, 3, 5, 7]),
+
+        # === Fixed to match your pipeline ===
+        "seq_len": 1600,
+        "horizon": 400,
+        "loss": "MSE",
+        "norm": True,
+        "use_series_stationarization": True,
+        "use_de_stationary_attention": True,
+    }
+
+    return search_space
 
 def crossformer_searchspace():
     """Enhanced Crossformer search space"""
@@ -363,6 +418,16 @@ def assemble_setup(setup_name: str):
                 has_loss_importance=False,
             ),
             timemixer_searchspace(),
+        ),
+        "nonstationary_transformer": (
+            base_eval_cfg,
+            config.model_config(
+                "paper_icps.tslib.models.Nonsstationary_Transformer.Model",
+                "transformer_adapter",
+                decoder_input_required=True,
+                has_loss_importance=False,
+            ),
+            nonstationary_transformer_searchspace(num_vars=num_vars),
         ),
     }
 
