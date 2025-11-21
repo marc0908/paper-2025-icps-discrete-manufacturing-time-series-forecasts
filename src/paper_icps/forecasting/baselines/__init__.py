@@ -1,4 +1,4 @@
-from .time_series_library import TimeXer, Crossformer, iTransformer, DLinear, TimesNet, TimeMixer, NonStationary, FEDformer, Informer, Autoformer, ETSformer
+from .time_series_library import TimeXer, Crossformer, iTransformer, DLinear, TimesNet, TimeMixer, NonStationary, FEDformer, Informer, Autoformer, ETSformer, PatchTST
 from .duet.duet import DUET  # Pfad ggf. an den realen Dateinamen anpassen
 
 ADAPTER = {
@@ -18,5 +18,6 @@ __all__ = [
     "FEDformer",
     "Informer",
     "Autoformer",
-    "ETSformer"
+    "ETSformer",
+    "PatchTST"
 ]
