@@ -557,16 +557,16 @@ def timemixer_searchspace():
     search_space = {
         # === Core architecture ===
         # d_model is small in paper (16 / 32 / 128 depending on dataset)
-        "d_model": tune.choice([16, 32, 64, 128, 256]),
+        "d_model": tune.choice([16, 32, 64, 96]),
         
         # Number of PDM blocks L (paper uses L=2, ablations show benefits for L=2–4)
         "e_layers": tune.choice([1, 2, 3, 4]),
 
         # Number of scales M (paper uses M=1 for short-term, M=3 for long-term)
-        "num_scales": tune.choice([1, 2, 3, 4]),
+        "num_scales": tune.choice([1, 2, 3]),
 
         # Feedforward width (not explicit; derive as multiples of d_model)
-        "d_ff_mult": tune.choice([2, 4, 8, 16]),  # d_ff = d_model * multiplier
+        "d_ff_mult": tune.choice([2, 4, 8]),  # d_ff = d_model * multiplier
 
         # === Learning parameters ===
         # Paper uses ADAM LR=1e-2 or 1e-3 depending on dataset
@@ -577,13 +577,14 @@ def timemixer_searchspace():
 
         # === Regularization ===
         "dropout": tune.uniform(0.0, 0.3),  # paper uses small dropout
-        "moving_avg": tune.choice([1, 3, 5, 7]),  # based on appendix
+        "moving_avg": tune.choice([3, 5, 7]),  # based on appendix
 
         # === Optimization and stabilization ===
         "batch_size": tune.choice([16, 32, 64, 128]),
         "grad_clip": tune.uniform(0.5, 2.0),
 
         "down_sampling_window": tune.choice([2, 4, 8]),
+        "down_sampling_layers": tune.choice([1, 2]),
         "channel_independence": tune.choice([True, False]),
 
         # === Fixed — based on your global pipeline ===
@@ -592,7 +593,7 @@ def timemixer_searchspace():
         "loss": "MSE",
         "norm": True,
         "num_epochs": config.max_epochs,
-        "patience": tune.choice([10, 15, 20]),
+        "patience": tune.choice([10, 15]),
     }
 
     return search_space
