@@ -66,6 +66,7 @@ class CustomDatasetWithOverrides(Dataset):
         label_length: int,
         input_sampling: int = 1,
         transform: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+        stride_samples: int = 1,
     ):
         self.orig_data = orig_data
         self.override_data = override_data
@@ -74,6 +75,7 @@ class CustomDatasetWithOverrides(Dataset):
         self.nlookahead = nlookahead
         self.label_length = label_length  # decoder lookback length
         self.input_sampling = input_sampling
+        self.stride_samples = max(1, int(stride_samples))
 
         # "Virtual" length: conceptually we treat this as orig + override samples
         self.virtual_len = 2 * len(orig_data)
@@ -96,6 +98,17 @@ class CustomDatasetWithOverrides(Dataset):
 
         # Optional global time offset (e.g., randomized per epoch)
         self.time_offset = 0
+
+        # precompute valid virtual start indices with stride
+        max_virtual_idx = (
+            self.virtual_len
+            - 2 * self.nlookback * self.input_sampling
+            - 2 * self.nlookahead
+        )
+        max_virtual_idx = max(0, max_virtual_idx)
+        self._virtual_indices = np.arange(
+            0, max_virtual_idx, self.stride_samples, dtype=int
+        )
 
     def _adjust_override_start_idx(
         self, overrides: Iterable[Tuple[int, int, int]], cycle_start_idxs: List[int]
@@ -190,11 +203,7 @@ class CustomDatasetWithOverrides(Dataset):
 
     def __len__(self) -> int:
         # Effective length after accounting for lookback/lookahead margins
-        return (
-            self.virtual_len
-            - 2 * self.nlookback * self.input_sampling
-            - 2 * self.nlookahead
-        )
+        return len(self._virtual_indices)
 
     def _find_next_override(
         self,
@@ -251,16 +260,21 @@ class CustomDatasetWithOverrides(Dataset):
             seq_lookback_mark : time indices for encoder
             seq_lookahead_mark: time indices for decoder
         """
-        # First part of the virtual range → original data
-        if (
-            idx
-            < len(self.orig_data)
+        # Map dataset index to "virtual" start index with stride
+        base_idx = int(self._virtual_indices[idx])
+
+        # Limit, until when we are using original data
+        orig_limit = (
+            len(self.orig_data)
             - self.nlookback * self.input_sampling
             - self.nlookahead
-        ):
-            split_idx = idx + self.nlookback * self.input_sampling
+        )
+
+        if base_idx < orig_limit:
+            # Original branch
+            split_idx = base_idx + self.nlookback * self.input_sampling
             seq_lookback = self.orig_data.iloc[
-                idx:split_idx:self.input_sampling, :
+                base_idx:split_idx:self.input_sampling, :
             ].values
             seq_lookahead = self.orig_data.iloc[
                 split_idx - self.label_length : split_idx + self.nlookahead, :
@@ -273,34 +287,33 @@ class CustomDatasetWithOverrides(Dataset):
                     self.nlookback,
                     self.nlookahead,
                 )
-        else:
-            # Second part of the virtual range → override data
-            idx -= (
-                len(self.orig_data)
-                - self.nlookback * self.input_sampling
-                - self.nlookahead
-            )
-            seq_lookback, seq_lookahead, idx = self._find_next_override(idx)
 
-        # Optionally transform input windows (e.g., normalization)
+            idx_for_marks = base_idx
+        else:
+            # Original branch with overrides
+            override_offset = base_idx - orig_limit
+            seq_lookback, seq_lookahead, idx_for_marks = self._find_next_override(
+                override_offset
+            )
+
+        # Optional transform
         if self.transform:
-            # Note: this may be a performance bottleneck; could be precomputed
             seq_lookback = self.transform(seq_lookback)
             seq_lookahead = self.transform(seq_lookahead)
 
         lookback_actual = self.nlookback * self.input_sampling
 
-        # Simple time indices as "marks" for encoder and decoder
+        # Time marks, original -> just withh idx_for_marks
         seq_lookback_mark = (
             torch.arange(0, lookback_actual, self.input_sampling)
-            + idx
+            + idx_for_marks
             + self.time_offset
         ).unsqueeze(-1)
         seq_lookahead_mark = (
             torch.arange(
                 lookback_actual - self.label_length, lookback_actual + self.nlookahead
             )
-            + idx
+            + idx_for_marks
             + self.time_offset
         ).unsqueeze(-1)
 
@@ -308,7 +321,7 @@ class CustomDatasetWithOverrides(Dataset):
         seq_lookahead = torch.tensor(seq_lookahead, dtype=torch.float32)
 
         return seq_lookback, seq_lookahead, seq_lookback_mark, seq_lookahead_mark
-
+    
 def _adapt_time_marks_for_temporal_embedding(
     nn_model: nn.Module,
     input_mark: torch.Tensor,
@@ -682,6 +695,10 @@ def train_model(
     horizon = evaluation_config["strategy_args"]["horizon"]
     lookahead = horizon
 
+    # sliding window stride (in samples)
+    strategy_args = evaluation_config.get("strategy_args", {})
+    sliding_stride = int(strategy_args.get("sliding_stride", 1))
+
     # Ensure TimesNet / TSL models see the right pred_len
     # (safe for other models; extra attr is just ignored if unused)
     setattr(model.config, "pred_len", horizon)
@@ -719,6 +736,7 @@ def train_model(
         lookahead,
         model.config.label_len,
         model.config.input_sampling,
+        stride_samples=sliding_stride,
     )
     validate_dataset = CustomDatasetWithOverrides(
         valid_data,
@@ -727,6 +745,7 @@ def train_model(
         lookahead,
         model.config.label_len,
         model.config.input_sampling,
+        stride_samples=sliding_stride,
     )
 
     start_time = time.time()

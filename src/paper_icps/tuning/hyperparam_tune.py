@@ -378,6 +378,7 @@ def run_hyperparameter_optimization(
     storage_url: str | None = None,
     enable_tensorboard: bool = True,
     stage: str = "coarse",
+    sliding_stride: int = 1
 ):
     """Run advanced hyperparameter optimization with improvements"""
     
@@ -407,6 +408,10 @@ def run_hyperparameter_optimization(
     eval_config, model_config, search_space = hyperparam_search_spaces.assemble_setup(
         model_setup
     )
+    # Ensure strategy_args exists
+    eval_config.setdefault("strategy_args", {})
+    eval_config["strategy_args"]["sliding_stride"] = int(sliding_stride)
+    
     model_config["models"][0]["input_sampling"] = 1
 
      # Stage-specific epoch budget
@@ -765,6 +770,12 @@ if __name__ == "__main__":
     parser.add_argument("--model-setup", type=str, required=True)
     parser.add_argument("--num-samples", type=int, default=80)
     parser.add_argument(
+        "--sliding-stride",
+        type=int,
+        default=1,
+        help="Sliding window stride in samples for dataset windows."
+                        )
+    parser.add_argument(
         "--scheduler",
         type=str,
         default="asha",
@@ -848,5 +859,6 @@ if __name__ == "__main__":
         enable_dashboard=args.enable_dashboard,
         storage_url=args.storage_url,
         enable_tensorboard=args.enable_tensorboard,
-        stage=args.stage
+        stage=args.stage,
+        sliding_stride=args.sliding_stride,
     )
