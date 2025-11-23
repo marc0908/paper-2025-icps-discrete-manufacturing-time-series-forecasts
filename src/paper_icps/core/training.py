@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 from torch import optim
 from torch.utils.data import Dataset, DataLoader
+from torch.cuda.amp import GradScaler
 
 from ..core import common
 from ..forecasting.models.model_loader import get_models
@@ -345,8 +346,13 @@ def _adapt_time_marks_for_temporal_embedding(
             in_feat = lin.in_features
             # Our dataset currently provides [B, T, 1]; expand if more features expected
             if input_mark.size(-1) == 1 and in_feat > 1:
-                input_mark = input_mark.float().repeat(1, 1, in_feat)
-                target_mark = target_mark.float().repeat(1, 1, in_feat)
+                # expand: keine echte Kopie, nur View mit angepassten Strides
+                input_mark = input_mark.float().expand(
+                    -1, -1, in_feat
+                )
+                target_mark = target_mark.float().expand(
+                    -1, -1, in_feat
+                )
             else:
                 input_mark = input_mark.float()
                 target_mark = target_mark.float()
@@ -508,6 +514,15 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
     model.early_stopping = common.EarlyStopping(patience=config.patience)
     nn_model.to(device)
 
+    # AMP: mixed precision
+    use_amp = bool(getattr(config, "use_amp", True)) and device.type == "cuda"
+    if use_amp:
+        print("Using AMP (mixed precision) for training.")
+    else:
+        print("AMP disabled or no CUDA device detected.")
+
+    scaler = GradScaler(enabled=use_amp)
+
     total_params = sum(p.numel() for p in nn_model.parameters() if p.requires_grad)
     print(f"Total trainable parameters: {total_params}")
 
@@ -531,53 +546,83 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
             input_mark = input_mark.to(device)
             target_mark = target_mark.to(device)
 
-            # Adapt time marks for models with temporal Linear embeddings (e.g. TimesNet)
+                        # Adapt time marks ...
             input_mark, target_mark = _adapt_time_marks_for_temporal_embedding(
                 nn_model, input_mark, target_mark
             )
 
             loss_importance: Optional[torch.Tensor] = None  # reset every batch
 
-            # Forward pass branch depending on model config
-            if config.decoder_input_required:
-                dec_input = torch.zeros_like(target[:, -config.horizon :, :]).float()
-                dec_input = (
-                    torch.cat([target[:, : config.label_len, :], dec_input], dim=1)
-                    .float()
-                    .to(device)
-                )
-                output = nn_model(input, input_mark, dec_input, target_mark)
-            elif config.has_loss_importance:
-                output, loss_importance = nn_model(input)
+            # --- AMP forward ---
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                if config.decoder_input_required:
+                    dec_input = torch.zeros_like(
+                        target[:, -config.horizon :, :]
+                    ).float()
+                    dec_input = (
+                        torch.cat(
+                            [target[:, : config.label_len, :], dec_input], dim=1
+                        )
+                        .float()
+                        .to(device)
+                    )
+                    output = nn_model(input, input_mark, dec_input, target_mark)
+                elif config.has_loss_importance:
+                    output, loss_importance = nn_model(input)
+                else:
+                    output = nn_model(input)
+
+                # Focus loss on forecast horizon
+                target_slice = target[:, -config.horizon :, :]
+                output_slice = output[:, -config.horizon :, :]
+                loss = criterion(output_slice, target_slice)
+
+                if getattr(config, "has_loss_importance", False):
+                    loss = loss + loss_importance  # type: ignore[name-defined]
+
+                        # --- Backward + Optimizer Step (AMP-aware) ---
+            if use_amp:
+                scaler.scale(loss).backward()
+
+                # Gradient norm (unscaled) for logging
+                try:
+                    scaler.unscale_(optimizer)  # make grads real for norm & clipping
+                    total_norm_sq = 0.0
+                    for p in nn_model.parameters():
+                        if p.grad is not None:
+                            param_norm = p.grad.data.norm(2).item()
+                            total_norm_sq += param_norm * param_norm
+                    last_grad_norm = total_norm_sq ** 0.5
+                except Exception:
+                    last_grad_norm = None
+
+                if hasattr(config, "grad_clip") and config.grad_clip is not None:
+                    torch.nn.utils.clip_grad_norm_(
+                        nn_model.parameters(), config.grad_clip
+                    )
+
+                scaler.step(optimizer)
+                scaler.update()
             else:
-                output = nn_model(input)
+                loss.backward()
 
-            # Focus loss on forecast horizon
-            target_slice = target[:, -config.horizon :, :]
-            output_slice = output[:, -config.horizon :, :]
-            loss = criterion(output_slice, target_slice)
+                # Gradient norm for logging
+                try:
+                    total_norm_sq = 0.0
+                    for p in nn_model.parameters():
+                        if p.grad is not None:
+                            param_norm = p.grad.data.norm(2).item()
+                            total_norm_sq += param_norm * param_norm
+                    last_grad_norm = total_norm_sq ** 0.5
+                except Exception:
+                    last_grad_norm = None
 
-            if getattr(config, "has_loss_importance", False):
-                loss = loss + loss_importance  # type: ignore[name-defined]
+                if hasattr(config, "grad_clip") and config.grad_clip is not None:
+                    torch.nn.utils.clip_grad_norm_(
+                        nn_model.parameters(), config.grad_clip
+                    )
 
-            loss.backward()
-
-            # Gradient norm for logging
-            try:
-                total_norm_sq = 0.0
-                for p in nn_model.parameters():
-                    if p.grad is not None:
-                        param_norm = p.grad.data.norm(2).item()
-                        total_norm_sq += param_norm * param_norm
-                last_grad_norm = total_norm_sq ** 0.5
-            except Exception:
-                last_grad_norm = None
-
-            # Gradient clipping (if configured)
-            if hasattr(config, "grad_clip") and config.grad_clip is not None:
-                torch.nn.utils.clip_grad_norm_(nn_model.parameters(), config.grad_clip)
-
-            optimizer.step()
+                optimizer.step()
 
             train_loss_sum += float(loss.item())
             num_batches += 1
