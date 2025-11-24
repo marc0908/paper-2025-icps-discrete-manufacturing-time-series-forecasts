@@ -1,6 +1,7 @@
 import gc
 import math
 import time
+import warnings
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Protocol, cast, Callable
 
 import numpy as np
@@ -515,7 +516,8 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
     nn_model.to(device)
 
     # AMP: mixed precision
-    use_amp = bool(getattr(config, "use_amp", True)) and device.type == "cuda"
+    #use_amp = bool(getattr(config, "use_amp", True)) and device.type == "cuda"
+    use_amp = (device.type == "cuda")
     if use_amp:
         print("Using AMP (mixed precision) for training.")
     else:
