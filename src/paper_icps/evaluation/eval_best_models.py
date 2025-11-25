@@ -12,6 +12,7 @@ import traceback
 from ..core import common
 from .eval1_single_lookahead import eval_model
 import matplotlib
+from typing import Dict, Optional, List
 
 import os
 import glob
@@ -96,13 +97,24 @@ def find_best_trials(experiment_dir, metric="val_loss", mode="min", top_k=3):
 
     return best_trials
 
-def evaluate_best_models(experiment_name, data_path, top_k=3, n_runs=100):
+def evaluate_best_models(
+        experiment_name: str, 
+        data_path: str, 
+        top_k: int = 3, 
+        n_runs: int = 100,
+        experiment_path: Optional[str] = None,
+        ):
     """Find and evaluate the best models for a given experiment."""
-    base_dir = os.path.expanduser("~/ray_results")
-    exp_dir = os.path.join(base_dir, experiment_name)
-    if not os.path.exists(exp_dir):
-        raise FileNotFoundError(f"Experiment directory not found: {exp_dir}")
 
+    if experiment_name != None:
+        exp_dir = str(experiment_path)
+    else:
+        base_dir = os.path.expanduser("~/ray_results")
+        exp_dir = os.path.join(base_dir, experiment_name)
+        
+    if not os.path.exists(exp_dir):
+            raise FileNotFoundError(f"Experiment directory not found: {exp_dir}")
+    
     print(f"\n=== Evaluating Best Models for Experiment: {experiment_name} ===")
 
     # Load dataset once
@@ -146,6 +158,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Evaluate best models from Ray Tune results")
     parser.add_argument("--experiment", required=True, help="Name of the experiment (e.g., TimeXer-Tuning)")
+    parser.add_argument("--experiment-path", required=False, help="Path to Experiment (autoamtically found through experiment name)")
     parser.add_argument("--data-path", required=True, help="Path to dataset CSV or ZIP")
     parser.add_argument("--top-k", type=int, default=3, help="Number of best models to evaluate")
     parser.add_argument("--n-runs", type=int, default=100, help="Number of random test runs for evaluation")
@@ -194,4 +207,5 @@ if __name__ == "__main__":
         data_path=args.data_path,
         top_k=args.top_k,
         n_runs=args.n_runs,
+        experiment_path=args.experiment_path
     )
