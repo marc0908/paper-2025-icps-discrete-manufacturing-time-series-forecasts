@@ -43,7 +43,7 @@ def timexer_searchspace():
         "norm": True,
         "num_epochs": config.max_epochs,
         "patience": tune.choice([10, 15, 20]),  # Tunable patience
-        "moving_avg": tune.choice([1, 3, 5, 7]),  # Added 7
+        "moving_avg": tune.choice([25, 51, 101, 201]),  # Smooting over 0.25, 0.5, 1 and 2 seconds
         
         # Advanced parameters
         "grad_clip": tune.uniform(0.5, 4.0),  # Gradient clipping
@@ -91,10 +91,11 @@ def fedformer_searchspace():
         "num_experts": tune.choice([3, 4, 5, 6]),
 
         # kernel sizes from Appendix F.5: [7, 12, 14, 24, 48]
+        # Adapted: Larger Kernels for 100Hz Smaples
         "expert_kernel_sizes": tune.choice([
-            [7, 12, 14, 24, 48],
-            [7, 14, 24],
-            [12, 24, 48],
+            [7, 12, 14, 24, 48],      # Original (good for Noise)
+            [24, 48, 96],             # In the Middle (0.5s - 1s)
+            [48, 96, 192],            # Long (1s - 2s Trends)
         ]),
 
         # ===== Learning & Training =====
@@ -118,7 +119,7 @@ def fedformer_searchspace():
         # ===== Stability parameters =====
         "grad_clip": tune.uniform(0.5, 2.0),
         "patience": tune.choice([5, 10, 15]),
-        "moving_avg": tune.choice([1, 3, 5]),
+        "moving_avg": tune.choice([25, 51, 101, 201]),  # Smooting over 0.25, 0.5, 1 and 2 seconds
     }
 
 def autoformer_searchspace(num_vars: int | None = None):
@@ -127,7 +128,6 @@ def autoformer_searchspace(num_vars: int | None = None):
 
     Based on:
     - d_model = 512, 2 encoder layers, 1 decoder layer in the paper
-    - moving_avg window k = 25
     - Adam, lr ~ 1e-4, L2 loss, batch_size = 32, early stop ~10 epochs  [oai_citation:0‡Autoformer.pdf](sediment://file_000000005f3871f4bd01b92c9dbf9c2f)
     """
 
@@ -152,8 +152,10 @@ def autoformer_searchspace(num_vars: int | None = None):
         "d_ff": tune.choice([256, 512, 1024]),
         "n_heads": tune.choice([4, 8]),
 
-        # decomposition (moving average) window – around k=25 in the paper  [oai_citation:1‡Autoformer.pdf](sediment://file_000000005f3871f4bd01b92c9dbf9c2f)
-        "moving_avg": tune.choice([7, 13, 25, 49]),
+        # DO NOT USE! decomposition (moving average) window – around k=25 in the paper  [oai_citation:1‡Autoformer.pdf](sediment://file_000000005f3871f4bd01b92c9dbf9c2f)
+        # IMPORTANT: Adapted to 100Hz Sampling-Rate
+        # 25 samples = 0.25s (too short for trend), 101 = 1s, 301 = 3s
+        "moving_avg": tune.choice([25, 51, 101, 201, 301]),
 
         # Auto-Correlation hyper-parameter c (Top-k periods: k = c * log L)  [oai_citation:2‡Autoformer.pdf](sediment://file_000000005f3871f4bd01b92c9dbf9c2f)
         "c": tune.randint(1, 4),   # {1, 2, 3}
@@ -226,7 +228,7 @@ def timesnet_searchspace(num_vars: int | None = None):
         "norm": True,
         "num_epochs": config.max_epochs,
         "patience": tune.choice([5, 10, 15]),
-        "moving_avg": tune.choice([1, 3, 5, 7]),
+        "moving_avg": tune.choice([25, 51, 101, 201]),  # Smooting over 0.25, 0.5, 1 and 2 seconds
         "grad_clip": tune.uniform(0.5, 2.0),
     }
 
@@ -270,8 +272,8 @@ def patchtst_searchspace():
         "grad_clip": tune.uniform(0.5, 2.0),
 
         # === PatchTST-specific switches ===
-        # Channel-independent is the whole point of PatchTST; keep it fixed to True.  [oai_citation:8‡PatchTST.pdf](sediment://file_00000000345071f48eacecf48aff9fd0)
-        "channel_independence": True,
+        # Channel-independent is the whole point of PatchTST; - but colides with our question  [oai_citation:8‡PatchTST.pdf](sediment://file_00000000345071f48eacecf48aff9fd0)
+        "channel_independence": tune.choice([True, False]),
         # We use instance-style normalization per series as in the paper  [oai_citation:9‡PatchTST.pdf](sediment://file_00000000345071f48eacecf48aff9fd0)
         "norm": True,
 
@@ -281,9 +283,9 @@ def patchtst_searchspace():
         "loss": "MSE",
         "num_epochs": config.max_epochs,
         "patience": tune.choice([10, 15, 20]),  # similar to other big models
-        # PatchTST itself doesn’t use moving-average decomposition, but some of your infra
-        # might expect the key – keep it trivial.
-        "moving_avg": 1,
+        # PatchTST itself doesn’t use moving-average decomposition, but some of infra
+        # might expect the key.
+        "moving_avg": tune.choice([25, 51, 101, 201]),  # Smooting over 0.25, 0.5, 1 and 2 seconds
     }
 
     return search_space
@@ -316,7 +318,7 @@ def duet_searchspace():
         "horizon": 400,
         "seq_len": 1600,
         "patch_len": tune.choice([8, 16, 32, 50, 100, 200, 400]),
-        "moving_avg": tune.choice([1, 3, 5, 7]),
+        "moving_avg": tune.choice([25, 51, 101, 201]),  # Smooting over 0.25, 0.5, 1 and 2 seconds
         
         # Fixed parameters
         "loss": "MAE",
@@ -372,7 +374,7 @@ def nonstationary_transformer_searchspace(num_vars: int | None = None):
         # === Training control ===
         "batch_size": tune.choice([16, 32, 64]),
         "patience": tune.choice([5, 10, 15]),
-        "moving_avg": tune.choice([1, 3, 5, 7]),
+        "moving_avg": tune.choice([25, 51, 101, 201]),  # Smooting over 0.25, 0.5, 1 and 2 seconds
 
         # === Fixed to match your pipeline ===
         "seq_len": 1600,
@@ -445,7 +447,7 @@ def informer_searchspace(num_vars: int | None = None):
         "norm": True,
         "num_epochs": config.max_epochs,
         "patience": tune.choice([5, 10, 15]),
-        "moving_avg": tune.choice([1, 3, 5, 7]),
+        "moving_avg": tune.choice([25, 51, 101, 201]),  # Smooting over 0.25, 0.5, 1 and 2 seconds
 
         # Gradient clipping for stability on long sequences
         "grad_clip": tune.uniform(0.5, 2.0),
@@ -481,7 +483,7 @@ def crossformer_searchspace():
         "norm": True,
         "num_epochs": config.max_epochs,
         "patience": tune.choice([10, 15, 20]),
-        "moving_avg": tune.choice([1, 3, 5, 7]),
+        "moving_avg": tune.choice([25, 51, 101, 201]),  # Smooting over 0.25, 0.5, 1 and 2 seconds
         
         # Additional
         "grad_clip": tune.uniform(0.5, 2.0),
@@ -516,7 +518,7 @@ def itransformer_searchspace():
         "norm": True,
         "num_epochs": config.max_epochs,
         "patience": tune.choice([10, 15, 20]),
-        "moving_avg": tune.choice([1, 3, 5, 7]),
+        "moving_avg": tune.choice([25, 51, 101, 201]),  # Smooting over 0.25, 0.5, 1 and 2 seconds
         
         # Additional
         "grad_clip": tune.uniform(0.5, 2.0),
@@ -545,7 +547,7 @@ def dlinear_searchspace():
         "norm": True,
         "num_epochs": config.max_epochs,
         "patience": tune.choice([5, 10, 15]),  # Can be more aggressive
-        "moving_avg": tune.choice([1, 3, 5, 7, 13]),  # More options for linear model
+        "moving_avg": tune.choice([25, 51, 101, 201]),  # Smooting over 0.25, 0.5, 1 and 2 seconds # More options for linear model
         
         # Additional
         "grad_clip": tune.uniform(0.5, 1.5),
@@ -570,20 +572,22 @@ def timemixer_searchspace():
 
         # === Learning parameters ===
         # Paper uses ADAM LR=1e-2 or 1e-3 depending on dataset
-        "lr": tune.loguniform(1e-4, 3e-2),
+        "lr": tune.loguniform(3e-5, 3e-3),
 
         # weight decay is not used, aber kann helfen
         "weight_decay": tune.loguniform(1e-8, 1e-3),
 
         # === Regularization ===
         "dropout": tune.uniform(0.0, 0.3),  # paper uses small dropout
-        "moving_avg": tune.choice([3, 5, 7]),  # based on appendix
+        "moving_avg": tune.choice([25, 51, 101, 201]),  # Smooting over 0.25, 0.5, 1 and 2 seconds
 
         # === Optimization and stabilization ===
         "batch_size": tune.choice([16, 32, 64, 128]),
         "grad_clip": tune.uniform(0.5, 2.0),
 
-        "down_sampling_window": tune.choice([2, 4, 8]),
+        # With Window 2 we get 1600 -> 800.
+        # With Window 10 we get 1600 -> 160 (much more efficient for rough trends)
+        "down_sampling_window": tune.choice([2, 4, 8, 10]),
         "down_sampling_layers": tune.choice([1, 2]),
         "channel_independence": tune.choice([True, False]),
 
@@ -640,7 +644,7 @@ def etsformer_searchspace():
         "norm": True,
         "num_epochs": config.max_epochs,
         "patience": tune.choice([5, 10, 15]),
-        "moving_avg": tune.choice([1, 3, 5, 7]),
+        "moving_avg": tune.choice([25, 51, 101, 201]),  # Smooting over 0.25, 0.5, 1 and 2 seconds
         "grad_clip": tune.uniform(0.5, 2.0),
     }
 
@@ -714,7 +718,7 @@ def assemble_setup(setup_name: str):
             config.model_config(
                 "paper_icps.tslib.models.TimeMixer.Model",
                 "transformer_adapter",
-                decoder_input_required=True,
+                decoder_input_required=False, # Not a pure Encoder Technology
                 has_loss_importance=False,
             ),
             timemixer_searchspace(),
