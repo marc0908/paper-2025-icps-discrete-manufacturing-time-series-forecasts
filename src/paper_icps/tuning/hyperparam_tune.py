@@ -378,7 +378,8 @@ def run_hyperparameter_optimization(
     storage_url: str | None = None,
     enable_tensorboard: bool = True,
     stage: str = "coarse",
-    sliding_stride: int = 1
+    sliding_stride: int = 1,
+    ray_dir: str | None = None,
 ):
     """Run advanced hyperparameter optimization with improvements"""
     
@@ -391,15 +392,25 @@ def run_hyperparameter_optimization(
     # ---------------------------
     # Experiment directory layout
     # ---------------------------
+    # ray_dir wird als ROOT verwendet, unter dem wir wie folgt speichern:
+    # <ray_root>/<model_setup>/<timestamp>/{ray,results...}
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    base_dir = os.path.expanduser(
-        os.path.join("~", "ray_icps", model_setup, timestamp)
-    )
-    os.makedirs(base_dir, exist_ok=True)
-    ray_dir = os.path.join(base_dir, "ray")
-    os.makedirs(ray_dir, exist_ok=True)
 
-    logger.info(f"Experiment directory: {base_dir}")
+    if ray_dir is None:
+        # Default root, falls nichts angegeben wurde
+        ray_root = os.path.expanduser("~/ray_icps")
+    else:
+        # User-specified root (z.B. /data/mtoiflhart/ray_icps)
+        ray_root = os.path.abspath(os.path.expanduser(ray_dir))
+
+    base_dir = os.path.join(ray_root, model_setup, timestamp)
+    ray_storage_dir = os.path.join(base_dir, "ray")
+
+    os.makedirs(ray_storage_dir, exist_ok=True)
+
+    logger.info(f"Experiment root directory: {ray_root}")
+    logger.info(f"Experiment base directory: {base_dir}")
+    logger.info(f"Ray storage directory:    {ray_storage_dir}")
 
 
     # ---------------------------
@@ -638,7 +649,7 @@ def run_hyperparameter_optimization(
         ),
         run_config=RunConfig(
             name=trainable_name,
-            storage_path=ray_dir,
+            storage_path=ray_storage_dir,
             stop=stopper,
             verbose=2,
             checkpoint_config=CheckpointConfig(
@@ -841,6 +852,15 @@ if __name__ == "__main__":
         action="store_true",
         help="Enable TensorBoard logging for Ray Tune trials",
     )
+    parser.add_argument(
+        "--ray-dir",
+        type=str,
+        default=None,
+        help=(
+            "Custom Ray storage directory (for checkpoints, logs, etc.). "
+            "If not set, defaults to ~/ray_icps/<model_setup>/<timestamp>/ray"
+        ),
+    )
 
     args = parser.parse_args()
     
@@ -861,4 +881,5 @@ if __name__ == "__main__":
         enable_tensorboard=args.enable_tensorboard,
         stage=args.stage,
         sliding_stride=args.sliding_stride,
+        ray_dir=args.ray_dir,
     )
