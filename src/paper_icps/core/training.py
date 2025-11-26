@@ -330,43 +330,90 @@ def _adapt_time_marks_for_temporal_embedding(
     target_mark: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    For models like TimesNet (and some TSL transformers) that use a Linear
-    temporal embedding expecting multiple calendar features per timestep,
-    adapt our [B, T, 1] marks to the expected in_features.
+    Improved version: Generates synthetic cyclic features (Sine/Cosine)
+    based on the physical cycle time (500 samples @ 100Hz),
+    instead of simply copying the scalar index multiple times.
 
-    If the model has enc_embedding.temporal_embedding.embed as nn.Linear
-    with in_features > 1, we repeat the scalar mark along the last axis.
-    Otherwise we just cast to float.
+    This helps models like Autoformer or TimesNet to understand the
+    cyclical nature of the robotic process without real calendar timestamps.
     """
     try:
+        # Inspect model structure to find the embedding layer
         enc_emb = getattr(nn_model, "enc_embedding", None)
         te = getattr(enc_emb, "temporal_embedding", None)
         lin = getattr(te, "embed", None) if te is not None else None
 
-        if isinstance(lin, nn.Linear):
-            in_feat = lin.in_features
-            # Our dataset currently provides [B, T, 1]; expand if more features expected
-            if input_mark.size(-1) == 1 and in_feat > 1:
-                # expand: keine echte Kopie, nur View mit angepassten Strides
-                input_mark = input_mark.float().expand(
-                    -1, -1, in_feat
-                )
-                target_mark = target_mark.float().expand(
-                    -1, -1, in_feat
-                )
-            else:
-                input_mark = input_mark.float()
-                target_mark = target_mark.float()
+        # Fallback to simple float cast if no linear embedding layer is found
+        if not isinstance(lin, nn.Linear):
+            return input_mark.float(), target_mark.float()
+
+        in_feat = lin.in_features
+        
+        # Scenario: Dataset provides scalar [Batch, Time, 1], 
+        # but Model expects vector [Batch, Time, in_feat]
+        if input_mark.size(-1) == 1 and in_feat > 1:
+            
+            # ---------------------------------------------------------
+            # START: Physics-Aware Feature Generation
+            # ---------------------------------------------------------
+            
+            # Physics Assumption: 5 seconds cycle at 100Hz sampling rate = 500 Samples
+            CYCLE_LEN = 500.0 
+            
+            def generate_cyclic_features(base_mark, num_features):
+                # 1. Normalized Index (Global Linear Trend)
+                # Scale down to prevent numerical instability with large indices
+                feat_trend = base_mark.float() / 10000.0 
+                
+                features = [feat_trend] # Feature 0: Trend
+                
+                if num_features > 1:
+                    # 2. Primary Cycle Features (Position within the 5s cycle)
+                    # Convert index to phase in radians (0 to 2pi)
+                    phase = (base_mark.float() % CYCLE_LEN) / CYCLE_LEN * 2 * math.pi
+                    
+                    # Feature 1: Sine wave of the cycle (smooth transition)
+                    features.append(torch.sin(phase))
+                    
+                if num_features > 2:
+                    # Feature 2: Cosine wave (phase-shifted, helps distinguish up/down movement)
+                    features.append(torch.cos(phase))
+                    
+                if num_features > 3:
+                    # Feature 3: Sub-cycle / High Frequency (e.g., 1s interval / 100 samples)
+                    # Captures faster vibrations or sub-movements
+                    fast_phase = (base_mark.float() % 100) / 100.0 * 2 * math.pi
+                    features.append(torch.sin(fast_phase))
+                
+                # If the model requires EVEN MORE features (e.g., 5, 6...), 
+                # fill the rest with the raw index as a safe fallback.
+                while len(features) < num_features:
+                    features.append(base_mark.float())
+                
+                # Stack along the feature dimension (last axis)
+                return torch.cat(features, dim=-1)
+
+            # Generate features for both encoder input and decoder target
+            new_input_mark = generate_cyclic_features(input_mark, in_feat)
+            new_target_mark = generate_cyclic_features(target_mark, in_feat)
+            
+            return new_input_mark, new_target_mark
+            
+            # ---------------------------------------------------------
+            # END OF FEATURE GENERATION
+            # ---------------------------------------------------------
+
         else:
-            input_mark = input_mark.float()
-            target_mark = target_mark.float()
-    except Exception:
-        # Be defensive: on any weird attribute layout, just ensure float dtype
-        input_mark = input_mark.float()
-        target_mark = target_mark.float()
+            # Dimensions already match, or model expects scalar input
+            return input_mark.float(), target_mark.float()
 
-    return input_mark, target_mark
-
+    except Exception as e:
+        # SAFETY NET: If any calculation fails (e.g., dimension mismatch),
+        # revert to the safe float cast to prevent training crashes.
+        # This ensures backward compatibility.
+        print(f"Warning in _adapt_time_marks: {e}, using fallback cast.")
+        return input_mark.float(), target_mark.float()
+    
 # ---------------------------------------------------------------------------
 # Learning rate schedule (from TFB)
 # ---------------------------------------------------------------------------
@@ -468,6 +515,8 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
         except Exception:
             data_generator = None
 
+    use_pin_memory = torch.cuda.is_available()
+
     train_data_loader = DataLoader(
         train_dataset,
         num_workers=num_workers,
@@ -476,6 +525,7 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
         shuffle=True,
         worker_init_fn=_worker_init_fn,
         generator=data_generator,
+        pin_memory=use_pin_memory,
     )
     valid_data_loader = DataLoader(
         validate_dataset,
@@ -485,6 +535,7 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
         shuffle=True,
         worker_init_fn=_worker_init_fn,
         generator=data_generator,
+        pin_memory=use_pin_memory,
     )
 
     # Loss selection
@@ -578,6 +629,11 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
                 target_slice = target[:, -config.horizon :, :]
                 output_slice = output[:, -config.horizon :, :]
                 loss = criterion(output_slice, target_slice)
+
+                if torch.isnan(loss):
+                    print(f"Warning: NaN loss detected at epoch {epoch}, batch {i}. Skipping step.")
+                    optimizer.zero_grad()
+                    continue # Skip this Batch, rescue the Model
 
                 if getattr(config, "has_loss_importance", False):
                     loss = loss + loss_importance  # type: ignore[name-defined]
@@ -794,6 +850,12 @@ def train_model(
         model.config.input_sampling,
         stride_samples=sliding_stride,
     )
+
+    print(f"Train Dataset Size: {len(train_dataset)} samples")
+    print(f"Valid Dataset Size: {len(validate_dataset)} samples")
+    
+    if len(train_dataset) == 0:
+        raise ValueError("Train dataset is empty! Check seq_len/horizon vs. data length.")
 
     start_time = time.time()
     forecast_fit(
