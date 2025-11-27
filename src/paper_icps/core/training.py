@@ -330,88 +330,65 @@ def _adapt_time_marks_for_temporal_embedding(
     target_mark: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Improved version: Generates synthetic cyclic features (Sine/Cosine)
-    based on the physical cycle time (500 samples @ 100Hz),
-    instead of simply copying the scalar index multiple times.
-
-    This helps models like Autoformer or TimesNet to understand the
-    cyclical nature of the robotic process without real calendar timestamps.
+    Revised Version (Variable Cycles):
+    Generates 'Positional Encoding' style features.
+    
+    1. Feature 0 is ALWAYS the raw index (crucial for TimeXer/Linear models).
+    2. Subsequent features are generic sine/cosine waves of DIFFERENT frequencies.
+       This avoids the incorrect assumption of a fixed 5s cycle.
     """
     try:
-        # Inspect model structure to find the embedding layer
         enc_emb = getattr(nn_model, "enc_embedding", None)
         te = getattr(enc_emb, "temporal_embedding", None)
         lin = getattr(te, "embed", None) if te is not None else None
 
-        # Fallback to simple float cast if no linear embedding layer is found
         if not isinstance(lin, nn.Linear):
             return input_mark.float(), target_mark.float()
 
         in_feat = lin.in_features
         
-        # Scenario: Dataset provides scalar [Batch, Time, 1], 
-        # but Model expects vector [Batch, Time, in_feat]
         if input_mark.size(-1) == 1 and in_feat > 1:
             
-            # ---------------------------------------------------------
-            # START: Physics-Aware Feature Generation
-            # ---------------------------------------------------------
-            
-            # Physics Assumption: 5 seconds cycle at 100Hz sampling rate = 500 Samples
-            CYCLE_LEN = 500.0 
-            
-            def generate_cyclic_features(base_mark, num_features):
-                # 1. Normalized Index (Global Linear Trend)
-                # Scale down to prevent numerical instability with large indices
-                feat_trend = base_mark.float() / 10000.0 
+            def generate_agnostic_features(base_mark, num_features):
+                # ---------------------------------------------------
+                # 1. RAW INDEX (Must be first!)
+                # ---------------------------------------------------
+                # TimeXer needs the absolute progression. No scaling / 10000 here!
+                features = [base_mark.float()] 
                 
-                features = [feat_trend] # Feature 0: Trend
+                # ---------------------------------------------------
+                # 2. GENERIC FREQUENCIES (No fixed cycle assumption)
+                # ---------------------------------------------------
+                # We add Sine/Cos waves with different wavelengths.
+                # This creates a unique "fingerprint" for every timestamp
+                # without enforcing a specific 5-second rhythm.
                 
-                if num_features > 1:
-                    # 2. Primary Cycle Features (Position within the 5s cycle)
-                    # Convert index to phase in radians (0 to 2pi)
-                    phase = (base_mark.float() % CYCLE_LEN) / CYCLE_LEN * 2 * math.pi
+                # Wavelengths: 100, 1000, 10000... samples
+                # Similar to original Transformer Positional Encoding
+                for i in range(1, num_features):
+                    # Alternating Sine and Cosine
+                    wavelength = 100.0 * (10.0 ** ((i-1) // 2))
                     
-                    # Feature 1: Sine wave of the cycle (smooth transition)
-                    features.append(torch.sin(phase))
+                    phase = base_mark.float() / wavelength * 2 * math.pi
                     
-                if num_features > 2:
-                    # Feature 2: Cosine wave (phase-shifted, helps distinguish up/down movement)
-                    features.append(torch.cos(phase))
-                    
-                if num_features > 3:
-                    # Feature 3: Sub-cycle / High Frequency (e.g., 1s interval / 100 samples)
-                    # Captures faster vibrations or sub-movements
-                    fast_phase = (base_mark.float() % 100) / 100.0 * 2 * math.pi
-                    features.append(torch.sin(fast_phase))
+                    if i % 2 == 1:
+                        features.append(torch.sin(phase)) # Sine
+                    else:
+                        features.append(torch.cos(phase)) # Cosine
                 
-                # If the model requires EVEN MORE features (e.g., 5, 6...), 
-                # fill the rest with the raw index as a safe fallback.
-                while len(features) < num_features:
-                    features.append(base_mark.float())
-                
-                # Stack along the feature dimension (last axis)
+                # Stack features
                 return torch.cat(features, dim=-1)
 
-            # Generate features for both encoder input and decoder target
-            new_input_mark = generate_cyclic_features(input_mark, in_feat)
-            new_target_mark = generate_cyclic_features(target_mark, in_feat)
+            new_input_mark = generate_agnostic_features(input_mark, in_feat)
+            new_target_mark = generate_agnostic_features(target_mark, in_feat)
             
             return new_input_mark, new_target_mark
-            
-            # ---------------------------------------------------------
-            # END OF FEATURE GENERATION
-            # ---------------------------------------------------------
 
         else:
-            # Dimensions already match, or model expects scalar input
             return input_mark.float(), target_mark.float()
 
     except Exception as e:
-        # SAFETY NET: If any calculation fails (e.g., dimension mismatch),
-        # revert to the safe float cast to prevent training crashes.
-        # This ensures backward compatibility.
-        print(f"Warning in _adapt_time_marks: {e}, using fallback cast.")
+        print(f"Warning in _adapt_time_marks: {e}, using fallback.")
         return input_mark.float(), target_mark.float()
     
 # ---------------------------------------------------------------------------
@@ -567,8 +544,13 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
     nn_model.to(device)
 
     # AMP: mixed precision
-    #use_amp = bool(getattr(config, "use_amp", True)) and device.type == "cuda"
-    use_amp = (device.type == "cuda")
+    # Logic: AMP is activated, if:
+    # 1. A GPU is available (cuda)
+    # 2. And the Config allows it
+    
+    config_use_amp = getattr(config, "use_amp", True) # Default True wenn nicht vorhanden
+    use_amp = (device.type == "cuda") and config_use_amp
+
     if use_amp:
         print("Using AMP (mixed precision) for training.")
     else:
@@ -593,6 +575,14 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
         nn_model.train()
         for i, (input, target, input_mark, target_mark) in enumerate(train_data_loader):
             optimizer.zero_grad()
+
+            if torch.isnan(input).any():
+                print(f"CRITICAL: NaNs found in INPUT data at batch {i}!")
+                # Zeige welche Spalte kaputt ist
+                for feat_idx in range(input.shape[-1]):
+                    if torch.isnan(input[:, :, feat_idx]).any():
+                        print(f" -> Feature Index {feat_idx} contains NaNs (likely variance=0)")
+                break # Sofort stoppen zum Debuggen
 
             input = input.to(device)
             target = target.to(device)
@@ -630,10 +620,10 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
                 output_slice = output[:, -config.horizon :, :]
                 loss = criterion(output_slice, target_slice)
 
-                if torch.isnan(loss):
+                """ if torch.isnan(loss):
                     print(f"Warning: NaN loss detected at epoch {epoch}, batch {i}. Skipping step.")
                     optimizer.zero_grad()
-                    continue # Skip this Batch, rescue the Model
+                    continue # Skip this Batch, rescue the Model """
 
                 if getattr(config, "has_loss_importance", False):
                     loss = loss + loss_importance  # type: ignore[name-defined]

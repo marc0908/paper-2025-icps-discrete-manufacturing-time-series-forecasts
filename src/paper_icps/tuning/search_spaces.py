@@ -718,7 +718,7 @@ def assemble_setup(setup_name: str):
             config.model_config(
                 "paper_icps.tslib.models.TimeMixer.Model",
                 "transformer_adapter",
-                decoder_input_required=False, # Not a pure Encoder Technology
+                decoder_input_required=True, # Not a pure Encoder Technology
                 has_loss_importance=False,
             ),
             timemixer_searchspace(),

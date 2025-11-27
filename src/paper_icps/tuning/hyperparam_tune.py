@@ -380,6 +380,7 @@ def run_hyperparameter_optimization(
     stage: str = "coarse",
     sliding_stride: int = 1,
     ray_dir: str | None = None,
+    use_amp: bool = True,
 ):
     """Run advanced hyperparameter optimization with improvements"""
     
@@ -419,6 +420,13 @@ def run_hyperparameter_optimization(
     eval_config, model_config, search_space = hyperparam_search_spaces.assemble_setup(
         model_setup
     )
+
+    # We set use_amp hard for all trials in this run
+    model_config["models"][0]["use_amp"] = use_amp
+    
+    if not use_amp:
+        logger.info("AMP (Automatic Mixed Precision) is DISABLED via CLI.")
+
     # Ensure strategy_args exists
     eval_config.setdefault("strategy_args", {})
     eval_config["strategy_args"]["sliding_stride"] = int(sliding_stride)
@@ -861,6 +869,11 @@ if __name__ == "__main__":
             "If not set, defaults to ~/ray_icps/<model_setup>/<timestamp>/ray"
         ),
     )
+    parser.add_argument(
+        "--no-amp",
+        action="store_true",
+        help="Force disable AMP (Automatic Mixed Precision). Useful for debugging NaNs.",
+    )
 
     args = parser.parse_args()
     
@@ -882,4 +895,5 @@ if __name__ == "__main__":
         stage=args.stage,
         sliding_stride=args.sliding_stride,
         ray_dir=args.ray_dir,
+        use_amp=not args.no_amp,
     )
