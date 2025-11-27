@@ -544,8 +544,13 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
     nn_model.to(device)
 
     # AMP: mixed precision
-    #use_amp = bool(getattr(config, "use_amp", True)) and device.type == "cuda"
-    use_amp = (device.type == "cuda")
+    # Logic: AMP is activated, if:
+    # 1. A GPU is available (cuda)
+    # 2. And the Config allows it
+    
+    config_use_amp = getattr(config, "use_amp", True) # Default True wenn nicht vorhanden
+    use_amp = (device.type == "cuda") and config_use_amp
+
     if use_amp:
         print("Using AMP (mixed precision) for training.")
     else:
