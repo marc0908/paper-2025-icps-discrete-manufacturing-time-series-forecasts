@@ -94,7 +94,7 @@ class CustomDatasetWithOverrides(Dataset):
         )
 
         # Align override segments to cycle starts in original data
-        self.overrides2 = self._adjust_override_start_idx(
+        self.overrides = self._adjust_override_start_idx(
             self.overrides, self.cycle_start_idxs
         )
 
@@ -323,6 +323,52 @@ class CustomDatasetWithOverrides(Dataset):
         seq_lookahead = torch.tensor(seq_lookahead, dtype=torch.float32)
 
         return seq_lookback, seq_lookahead, seq_lookback_mark, seq_lookahead_mark
+
+def _generate_transformer_style_time_features(
+    base_mark: torch.Tensor,  # [B, T, 1]
+    num_features: int,        # = lin.in_features
+) -> torch.Tensor:
+    """
+    Transformer-style sinusoidal positional encoding.
+
+    - Feature 0: raw index (base_mark)
+    - Features 1..: log-spaced sine/cosine frequencies
+      following the standard "Attention is All You Need" formulation.
+    """
+    # Base index as float
+    pos = base_mark.float()          # [B, T, 1]
+    features = [pos]                 # First feature = raw index
+
+    # Remaining dimensions for sinusoidal encoding
+    pe_dims = num_features - 1
+    if pe_dims <= 0:
+        return pos  # Linear layer expects only one feature
+
+    # Number of sine/cosine pairs needed
+    num_pairs = (pe_dims + 1) // 2
+
+    # Classic Transformer scaling:
+    #   div_term = 1 / (10000^(2i/d))
+    # Produces logarithmically spaced frequencies
+    i = torch.arange(0, num_pairs, device=pos.device, dtype=pos.dtype)
+    div_term = torch.exp(-math.log(10000.0) * (2 * i / num_pairs))
+
+    # Phase for each frequency
+    # Broadcasts: [B, T, 1] * [num_pairs] -> [B, T, num_pairs]
+    phase = pos * div_term.view(1, 1, -1)
+
+    sin_feats = torch.sin(phase)
+    cos_feats = torch.cos(phase)
+
+    # Interleave sine and cosine: [sin_0, cos_0, sin_1, cos_1, ...]
+    pe = torch.stack((sin_feats, cos_feats), dim=-1)  # [B, T, num_pairs, 2]
+    pe = pe.view(pos.shape[0], pos.shape[1], -1)      # [B, T, 2*num_pairs]
+
+    # Trim to the exact required number of features
+    pe = pe[:, :, :pe_dims]
+
+    # Concatenate raw index + sinusoidal encoding
+    return torch.cat([pos, pe], dim=-1)
     
 def _adapt_time_marks_for_temporal_embedding(
     nn_model: nn.Module,
@@ -330,67 +376,40 @@ def _adapt_time_marks_for_temporal_embedding(
     target_mark: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Revised Version (Variable Cycles):
-    Generates 'Positional Encoding' style features.
-    
-    1. Feature 0 is ALWAYS the raw index (crucial for TimeXer/Linear models).
-    2. Subsequent features are generic sine/cosine waves of DIFFERENT frequencies.
-       This avoids the incorrect assumption of a fixed 5s cycle.
+    Applies best-practice temporal encoding for models that support
+    temporal embeddings via a Linear layer.
+
+    - If the temporal embedding layer expects >1 features, the 1-D index
+      is expanded into Transformer-style positional encodings.
+    - Otherwise, the raw index is returned unchanged.
     """
     try:
         enc_emb = getattr(nn_model, "enc_embedding", None)
         te = getattr(enc_emb, "temporal_embedding", None)
         lin = getattr(te, "embed", None) if te is not None else None
 
+        # Only transform if a Linear temporal embedding exists
         if not isinstance(lin, nn.Linear):
             return input_mark.float(), target_mark.float()
 
         in_feat = lin.in_features
-        
+
+        # Only expand if the incoming feature dimension is 1
         if input_mark.size(-1) == 1 and in_feat > 1:
-            
-            def generate_agnostic_features(base_mark, num_features):
-                # ---------------------------------------------------
-                # 1. RAW INDEX (Must be first!)
-                # ---------------------------------------------------
-                # TimeXer needs the absolute progression. No scaling / 10000 here!
-                features = [base_mark.float()] 
-                
-                # ---------------------------------------------------
-                # 2. GENERIC FREQUENCIES (No fixed cycle assumption)
-                # ---------------------------------------------------
-                # We add Sine/Cos waves with different wavelengths.
-                # This creates a unique "fingerprint" for every timestamp
-                # without enforcing a specific 5-second rhythm.
-                
-                # Wavelengths: 100, 1000, 10000... samples
-                # Similar to original Transformer Positional Encoding
-                for i in range(1, num_features):
-                    # Alternating Sine and Cosine
-                    wavelength = 100.0 * (10.0 ** ((i-1) // 2))
-                    
-                    phase = base_mark.float() / wavelength * 2 * math.pi
-                    
-                    if i % 2 == 1:
-                        features.append(torch.sin(phase)) # Sine
-                    else:
-                        features.append(torch.cos(phase)) # Cosine
-                
-                # Stack features
-                return torch.cat(features, dim=-1)
-
-            new_input_mark = generate_agnostic_features(input_mark, in_feat)
-            new_target_mark = generate_agnostic_features(target_mark, in_feat)
-            
+            new_input_mark = _generate_transformer_style_time_features(
+                input_mark, in_feat
+            )
+            new_target_mark = _generate_transformer_style_time_features(
+                target_mark, in_feat
+            )
             return new_input_mark, new_target_mark
-
         else:
             return input_mark.float(), target_mark.float()
 
     except Exception as e:
         print(f"Warning in _adapt_time_marks: {e}, using fallback.")
         return input_mark.float(), target_mark.float()
-    
+        
 # ---------------------------------------------------------------------------
 # Learning rate schedule (from TFB)
 # ---------------------------------------------------------------------------
