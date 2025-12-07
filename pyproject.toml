@@ -37,7 +37,9 @@ dependencies = [
     # Torch is installed manually with the correct CUDA version:
     # pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
-    "tqdm==4.67.1"
+    "tqdm==4.67.1",
+    "bayesian-optimization>=1.4.3",
+    "hyperopt"
 ]
 
 [tool.setuptools.packages.find]
