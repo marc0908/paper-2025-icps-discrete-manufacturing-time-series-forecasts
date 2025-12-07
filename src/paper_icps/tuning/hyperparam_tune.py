@@ -20,9 +20,8 @@ from ray.tune.logger import TBXLoggerCallback
 from ray.tune.search.hyperopt import HyperOptSearch
 from ray.tune.search.bayesopt import BayesOptSearch
 from ray.tune.search.optuna import OptunaSearch
-from ray.tune.search import ConcurrencyLimiter
 from ray.tune.stopper import Stopper
-from ray.tune import Tuner, TuneConfig, PlacementGroupFactory, RunConfig, CLIReporter
+from ray.tune import Tuner, TuneConfig, RunConfig, CLIReporter
 from ray.air import CheckpointConfig, FailureConfig
 from tensorboardX import SummaryWriter
 
@@ -281,7 +280,8 @@ def get_search_algorithm(
     
     # Wrap with concurrency limiter to prevent resource exhaustion
     base_algo = algorithms.get(search_algo, algorithms["optuna"])
-    return ConcurrencyLimiter(base_algo, max_concurrent=max_concurrent)
+    return base_algo
+    #return ConcurrencyLimiter(base_algo, max_concurrent=max_concurrent)
 
 
 def callback(val_loss, val_loss_min, model, epoch, metrics_history, extras: dict | None = None):
@@ -380,6 +380,7 @@ def run_hyperparameter_optimization(
     stage: str = "coarse",
     sliding_stride: int = 1,
     ray_dir: str | None = None,
+    use_amp: bool = True,
 ):
     """Run advanced hyperparameter optimization with improvements"""
     
@@ -419,13 +420,20 @@ def run_hyperparameter_optimization(
     eval_config, model_config, search_space = hyperparam_search_spaces.assemble_setup(
         model_setup
     )
+
+    # We set use_amp hard for all trials in this run
+    model_config["models"][0]["use_amp"] = use_amp
+    
+    if not use_amp:
+        logger.info("AMP (Automatic Mixed Precision) is DISABLED via CLI.")
+
     # Ensure strategy_args exists
     eval_config.setdefault("strategy_args", {})
     eval_config["strategy_args"]["sliding_stride"] = int(sliding_stride)
     
     model_config["models"][0]["input_sampling"] = 1
 
-     # Stage-specific epoch budget
+    # Stage-specific epoch budget
     if stage == "coarse":
         max_epochs = min(MAX_EPOCHS_COARSE, config.max_epochs)
     else:
@@ -455,7 +463,7 @@ def run_hyperparameter_optimization(
             base_space=search_space,
             previous_results=previous_results,
             metric="val_loss",
-            top_k=10,  # you can tune this
+            top_k=10, # Tuneable
         )
     elif stage == "fine" and not previous_results:
         logger.warning(
@@ -619,10 +627,9 @@ def run_hyperparameter_optimization(
     param_space = {"hparams": search_space}
     param_space.update(base_tune_config)
 
-    placement = PlacementGroupFactory([{"CPU": cpu_per_trial, "GPU": gpu_per_trial}])
-
     trainable_with_resources = tune.with_resources(
-        training_wrapper, resources=placement
+        training_wrapper, 
+        resources={"cpu": cpu_per_trial, "gpu": gpu_per_trial}
     )
 
     # If PBT is used, search algorithm must be None
@@ -659,7 +666,7 @@ def run_hyperparameter_optimization(
             ),
             failure_config=FailureConfig(max_failures=5),
             callbacks=[TBXLoggerCallback()] if enable_tensorboard else [],
-            progress_reporter=progress_reporter,
+            progress_reporter=progress_reporter
         ),
     )
 
@@ -861,6 +868,11 @@ if __name__ == "__main__":
             "If not set, defaults to ~/ray_icps/<model_setup>/<timestamp>/ray"
         ),
     )
+    parser.add_argument(
+        "--no-amp",
+        action="store_true",
+        help="Force disable AMP (Automatic Mixed Precision). Useful for debugging NaNs.",
+    )
 
     args = parser.parse_args()
     
@@ -882,4 +894,5 @@ if __name__ == "__main__":
         stage=args.stage,
         sliding_stride=args.sliding_stride,
         ray_dir=args.ray_dir,
+        use_amp=not args.no_amp,
     )
