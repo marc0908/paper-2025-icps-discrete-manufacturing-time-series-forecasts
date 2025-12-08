@@ -8,10 +8,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch import optim
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler
 
-from ..core import common
+from . import common, dataset
 from ..forecasting.models.model_loader import get_models
 
 class ForecastingModel(Protocol):
@@ -48,281 +48,6 @@ class ForecastingModel(Protocol):
     def model_class(self) -> Any:
         ...
 
-class CustomDatasetWithOverrides(Dataset):
-    """
-    Dataset that mixes 'normal' trajectories and 'override' trajectories.
-
-    It produces encoder/decoder input windows and corresponding "time marks"
-    for models like DUET that use positional/time encodings as a separate input.
-
-    For the first part of indices, samples are taken from `orig_data`.
-    For the second part, windows are sampled from `override_data` near override events.
-    """
-
-    def __init__(
-        self,
-        orig_data,
-        override_data,
-        nlookback: int,
-        nlookahead: int,
-        label_length: int,
-        input_sampling: int = 1,
-        transform: Optional[Callable[[np.ndarray], np.ndarray]] = None,
-        stride_samples: int = 1,
-    ):
-        self.orig_data = orig_data
-        self.override_data = override_data
-        self.transform = transform
-        self.nlookback = nlookback
-        self.nlookahead = nlookahead
-        self.label_length = label_length  # decoder lookback length
-        self.input_sampling = input_sampling
-        self.stride_samples = max(1, int(stride_samples))
-
-        # "Virtual" length: conceptually we treat this as orig + override samples
-        self.virtual_len = 2 * len(orig_data)
-
-        # Detect override ranges in override_data (where Override is high)
-        self.overrides = self._find_trajectory_override_ranges(
-            self.override_data["Override"].values,
-            self.override_data["TargetYaw"].values,
-        )
-
-        # Detect cycle starts in original trajectories
-        self.cycle_start_idxs = self._find_cycle_starts(
-            self.orig_data["TargetYaw"].values
-        )
-
-        # Align override segments to cycle starts in original data
-        self.overrides = self._adjust_override_start_idx(
-            self.overrides, self.cycle_start_idxs
-        )
-
-        # Optional global time offset (e.g., randomized per epoch)
-        self.time_offset = 0
-
-        # precompute valid virtual start indices with stride
-        max_virtual_idx = (
-            self.virtual_len
-            - 2 * self.nlookback * self.input_sampling
-            - 2 * self.nlookahead
-        )
-        max_virtual_idx = max(0, max_virtual_idx)
-        self._virtual_indices = np.arange(
-            0, max_virtual_idx, self.stride_samples, dtype=int
-        )
-
-    def _adjust_override_start_idx(
-        self, overrides: Iterable[Tuple[int, int, int]], cycle_start_idxs: List[int]
-    ) -> List[Tuple[int, int, int]]:
-        """
-        Align override segments with corresponding original cycles,
-        so that time marks can be mapped consistently.
-        """
-        j = 0
-        adjusted_overrides: List[Tuple[int, int, int]] = []
-        for override_start_idx, override_end_idx, cycle_start_before_idx in overrides:
-            override_dist_to_start = override_start_idx - cycle_start_before_idx
-            orig_data_start_idx = cycle_start_idxs[j] + override_dist_to_start
-            adjusted_overrides.append(
-                (override_start_idx, override_end_idx, orig_data_start_idx)
-            )
-            j += 1
-            if j >= len(cycle_start_idxs):
-                j = 0
-        return adjusted_overrides
-
-    def _find_cycle_starts(self, arr: np.ndarray) -> List[int]:
-        """
-        Heuristic to find start indices of cycles in the TargetYaw signal.
-
-        It looks for minima and tracks the max value between them. A new
-        "overall cycle" (of multiple shorter cycles) is detected when the per-cycle
-        max decreases, indicating the start of a larger pattern.
-        """
-        cycle_start_val = np.min(arr)
-        max_val = 0.0
-        cycle_start_idx = -1
-        start_idxs_and_max: List[Tuple[int, float]] = []
-        min_seconds = 5 * 100  # assuming 100 Hz sampling
-
-        for i in range(len(arr)):
-            if abs(arr[i] - cycle_start_val) < 1e-5:
-                dist_to_last_cycle_start = i - cycle_start_idx
-                if dist_to_last_cycle_start > min_seconds:
-                    start_idxs_and_max.append((cycle_start_idx, max_val))
-                    max_val = 0.0
-                cycle_start_idx = i
-            if arr[i] > max_val:
-                max_val = arr[i]
-
-        prev_max_per_cycle = 0.0
-        first_cycles: List[int] = []
-        for start_idx, max_per_cycle in start_idxs_and_max:
-            if max_per_cycle < prev_max_per_cycle:
-                # New overall cycle (set of cycles) starts at lower max
-                first_cycles.append(start_idx)
-            prev_max_per_cycle = max_per_cycle
-
-        return first_cycles
-
-    def _find_trajectory_override_ranges(
-        self, overrides: np.ndarray, targetyaw: np.ndarray
-    ) -> List[Tuple[int, int, int]]:
-        """
-        Find contiguous ranges where override is active and associate each range
-        with the start index of the previous cycle in TargetYaw.
-        """
-        cycle_start_val = np.min(targetyaw)
-        cycle_start_idx = 0
-        last_cycle_start_idx = 0
-
-        override_val = np.max(overrides)
-        found_len = 0
-        found_len_start = 0
-        override_ranges: List[Tuple[int, int, int]] = []
-
-        # Find first override-ish start (not used later, but kept for compatibility)
-        override_start_idx = np.argmax(overrides > 0.9)
-
-        for i in range(
-            self.nlookback, len(self.override_data) - self.nlookback - self.nlookahead
-        ):
-            if abs(targetyaw[i] - cycle_start_val) < 1e-5:
-                if cycle_start_idx != i - 1:
-                    last_cycle_start_idx = cycle_start_idx
-                cycle_start_idx = i
-
-            if abs(overrides[i] - override_val) < 1e-5:
-                if found_len == 0:
-                    found_len_start = i
-                found_len += 1
-            elif found_len > 0:
-                override_ranges.append((found_len_start, i, last_cycle_start_idx))
-                found_len = 0
-
-        return override_ranges
-
-    def __len__(self) -> int:
-        # Effective length after accounting for lookback/lookahead margins
-        return len(self._virtual_indices)
-
-    def _find_next_override(
-        self,
-        offset: int,
-    ) -> Tuple[np.ndarray, np.ndarray, int]:
-        """
-        Map a virtual index offset into an override window in override_data.
-        Returns:
-            seq_lookback, seq_lookahead, orig_data_start_idx
-        """
-        # Map offset from orig_data length scale to override_data length scale
-        offset = int(offset / len(self.orig_data) * len(self.override_data))
-
-        override_start_idx = self.overrides[0][0]  # fallback
-        orig_data_start_idx = self.overrides[0][2]
-
-        for start_idx, end_idx, orig_data_start_idx in self.overrides:
-            if offset < start_idx and start_idx > self.input_sampling * self.nlookback:
-                override_start_idx = start_idx
-                break
-
-        slice_start_random_offset = offset % 100
-        include_target_pitch_change_offset = 4
-
-        slice_start = (
-            override_start_idx
-            - self.nlookback * self.input_sampling
-            + include_target_pitch_change_offset
-            + slice_start_random_offset
-        )
-        split_idx = slice_start + self.input_sampling * self.nlookback
-
-        seq_lookback = self.override_data.iloc[
-            slice_start:split_idx:self.input_sampling, :
-        ].values
-        seq_lookahead = self.override_data.iloc[
-            split_idx - self.label_length : split_idx + self.nlookahead, :
-        ].values
-
-        if len(seq_lookback) < self.nlookback:
-            print(
-                "Error - insufficient len:",
-                offset,
-                len(self.orig_data) - self.nlookahead - self.nlookahead,
-                override_start_idx,
-            )
-        return seq_lookback, seq_lookahead, orig_data_start_idx
-
-    def __getitem__(self, idx: int):
-        """
-        Return:
-            seq_lookback      : encoder input window
-            seq_lookahead     : decoder target window (label_len + horizon)
-            seq_lookback_mark : time indices for encoder
-            seq_lookahead_mark: time indices for decoder
-        """
-        # Map dataset index to "virtual" start index with stride
-        base_idx = int(self._virtual_indices[idx])
-
-        # Limit, until when we are using original data
-        orig_limit = (
-            len(self.orig_data)
-            - self.nlookback * self.input_sampling
-            - self.nlookahead
-        )
-
-        if base_idx < orig_limit:
-            # Original branch
-            split_idx = base_idx + self.nlookback * self.input_sampling
-            seq_lookback = self.orig_data.iloc[
-                base_idx:split_idx:self.input_sampling, :
-            ].values
-            seq_lookahead = self.orig_data.iloc[
-                split_idx - self.label_length : split_idx + self.nlookahead, :
-            ].values
-
-            if len(seq_lookback) < self.nlookback:
-                print(
-                    "Error, sequence too short!",
-                    len(seq_lookback),
-                    self.nlookback,
-                    self.nlookahead,
-                )
-
-            idx_for_marks = base_idx
-        else:
-            # Original branch with overrides
-            override_offset = base_idx - orig_limit
-            seq_lookback, seq_lookahead, idx_for_marks = self._find_next_override(
-                override_offset
-            )
-
-        # Optional transform
-        if self.transform:
-            seq_lookback = self.transform(seq_lookback)
-            seq_lookahead = self.transform(seq_lookahead)
-
-        lookback_actual = self.nlookback * self.input_sampling
-
-        # Time marks, original -> just withh idx_for_marks
-        seq_lookback_mark = (
-            torch.arange(0, lookback_actual, self.input_sampling)
-            + idx_for_marks
-            + self.time_offset
-        ).unsqueeze(-1)
-        seq_lookahead_mark = (
-            torch.arange(
-                lookback_actual - self.label_length, lookback_actual + self.nlookahead
-            )
-            + idx_for_marks
-            + self.time_offset
-        ).unsqueeze(-1)
-
-        seq_lookback = torch.tensor(seq_lookback, dtype=torch.float32)
-        seq_lookahead = torch.tensor(seq_lookahead, dtype=torch.float32)
-
-        return seq_lookback, seq_lookahead, seq_lookback_mark, seq_lookahead_mark
 
 def _generate_transformer_style_time_features(
     base_mark: torch.Tensor,  # [B, T, 1]
@@ -746,8 +471,8 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
 # ---------------------------------------------------------------------------
 
 def train_model(
-    model_config: Dict[str, Any],
-    evaluation_config: Dict[str, Any],
+    model_config: dict[str, Any],
+    evaluation_config: dict[str, Any],
     **kwargs,
 ) -> Dict[str, Any]:
     """
@@ -755,7 +480,7 @@ def train_model(
 
     Steps:
         1. Apply global seed from evaluation_config (if present)
-        2. Build model from model_config
+        2. Build model from model_config (using TFB factory)
         3. Load & split datasets (normal + overrides)
         4. Scale data and create CustomDatasetWithOverrides instances
         5. Run forecast_fit() training loop
@@ -841,7 +566,7 @@ def train_model(
     gc.collect()
 
     # Build datasets
-    train_dataset = CustomDatasetWithOverrides(
+    train_dataset = dataset.CustomDatasetWithOverrides(
         train_data,
         train_data_w_overrides,
         lookback,
@@ -850,7 +575,7 @@ def train_model(
         model.config.input_sampling,
         stride_samples=sliding_stride,
     )
-    validate_dataset = CustomDatasetWithOverrides(
+    validate_dataset = dataset.CustomDatasetWithOverrides(
         valid_data,
         valid_data_w_overrides,
         lookback,
