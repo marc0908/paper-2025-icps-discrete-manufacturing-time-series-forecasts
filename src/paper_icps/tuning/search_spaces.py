@@ -58,69 +58,38 @@ def fedformer_searchspace():
     """
 
     return {
-        # ===== Core architecture =====
-        # Encoder/Decoder layers (paper uses N=2, M=1 or similar small depth)
-        "e_layers": tune.choice([1, 2, 3]),
-        "d_layers": tune.choice([1, 2]),
-
-        # Hidden dimension D — Table figs suggest 64–512 depending on dataset
-        "d_model": tune.choice([64, 128, 256, 512]),
-
-        # FFN width — multiples of d_model shown in architecture
-        "d_ff": tune.choice([256, 512, 1024, 2048]),
-
-        # Attention heads — typical 4–8 for these model sizes
+        "e_layers": tune.choice([1, 2]),
+        "d_layers": tune.choice([1]),
+        "d_model": tune.choice([64, 128, 256]),
+        "d_ff": tune.choice([256, 512, 1024]),
         "n_heads": tune.choice([4, 8]),
 
-        # ===== Frequency domain parameters =====
-        # Number of Fourier/Wavelet modes (Section 4.3 + Figure 6) — default M=64
-        "modes": tune.choice([16, 32, 64, 96, 128]),
+        "modes": tune.choice([16, 32, 48, 64]),
+        "domain": tune.choice(["fourier"]),
 
-        # Fourier or Wavelet block
-        # FEB-f / FEB-w and FEA-f / FEA-w as per Section 3.2 / 3.3
-        "domain": tune.choice(["fourier", "wavelet"]),
-
-        # Wavelet levels L (Appendix D)
-        "wavelet_levels": tune.choice([2, 3, 4]),
-
-        # Activation for frequency attention (Section 3.2 FEA-f)
-        "fea_activation": tune.choice(["softmax", "tanh"]),
-
-        # ===== Mixture-of-Experts Seasonal-Trend Decomposition =====
-        # Based on MOEDecomp (Section 3.4)
-        "num_experts": tune.choice([3, 4, 5, 6]),
-
-        # kernel sizes from Appendix F.5: [7, 12, 14, 24, 48]
-        # Adapted: Larger Kernels for 100Hz Smaples
+        "num_experts": tune.choice([3, 4]),
         "expert_kernel_sizes": tune.choice([
-            [7, 12, 14, 24, 48],      # Original (good for Noise)
-            [24, 48, 96],             # In the Middle (0.5s - 1s)
-            [48, 96, 192],            # Long (1s - 2s Trends)
+            [7, 12, 14, 24],      
+            [24, 48],
+            [48, 96],
         ]),
 
-        # ===== Learning & Training =====
-        "batch_size": tune.choice([16, 32, 64]),
+        "batch_size": tune.choice([8, 16, 32]),
+        "lr": tune.loguniform(1e-4, 3e-4),
+        "weight_decay": tune.loguniform(1e-6, 1e-4),
+        "dropout": tune.uniform(0.0, 0.1),
 
-        # Paper uses Adam with lr=1e-4 (Appendix F.2) — allow small variation
-        "lr": tune.loguniform(3e-5, 3e-4),
-
-        # For stability, match TimesNet defaults
-        "weight_decay": tune.loguniform(1e-6, 1e-3),
-
-        # Dropout — paper uses small dropout (0.05–0.1)
-        "dropout": tune.uniform(0.0, 0.2),
-
-        # ===== Fixed for your pipeline =====
-        "horizon": 400,
-        "seq_len": 1600,
-        "loss": "MSE",
         "norm": True,
+        "seq_len": 1024,
+        "horizon": 400,
+        "embed": "timeF",
+        "freq": 'm',
 
-        # ===== Stability parameters =====
-        "grad_clip": tune.uniform(0.5, 2.0),
-        "patience": tune.choice([5, 10, 15]),
-        "moving_avg": tune.choice([25, 51, 101, 201]),  # Smooting over 0.25, 0.5, 1 and 2 seconds
+        "moving_avg": tune.choice([25, 51]),
+        "grad_clip": tune.uniform(0.5, 1.5),
+        "patience": tune.choice([5, 10]),
     }
+
 
 def autoformer_searchspace(num_vars: int | None = None):
     """
