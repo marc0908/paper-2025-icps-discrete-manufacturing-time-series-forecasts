@@ -489,6 +489,9 @@ def train_model(
 
     gc.collect()
 
+    generate_temporal_features=getattr(model.config, "generate_temporal_features", False)
+    freq = getattr(model.config, "freq")
+
     # Build datasets
     train_dataset = dataset.CustomDatasetWithOverrides(
         train_data,
@@ -498,6 +501,9 @@ def train_model(
         model.config.label_len,
         model.config.input_sampling,
         stride_samples=sliding_stride,
+        generate_temporal_features=generate_temporal_features,
+        freq=freq,
+
     )
     validate_dataset = dataset.CustomDatasetWithOverrides(
         valid_data,
@@ -507,6 +513,8 @@ def train_model(
         model.config.label_len,
         model.config.input_sampling,
         stride_samples=sliding_stride,
+        generate_temporal_features=generate_temporal_features,
+        freq=freq,
     )
 
     print(f"Train Dataset Size: {len(train_dataset)} samples")
