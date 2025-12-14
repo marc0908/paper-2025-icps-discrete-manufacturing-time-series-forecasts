@@ -208,6 +208,8 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
     # 1. A GPU is available (cuda)
     # 2. And the Config allows it
 
+    print("cuda is available: " + str(torch.cuda.is_available()))
+
     config_use_amp = getattr(config, "use_amp", True) # default to True
     use_amp = (device.type == "cuda") and config_use_amp
 

@@ -287,7 +287,7 @@ class CustomDatasetWithOverrides(Dataset):
 
         seq_lookback_mark = torch.tensor(seq_lookback_mark, dtype=torch.float32)
         seq_lookahead_mark = torch.tensor(seq_lookahead_mark, dtype=torch.float32)
-
+        
         return seq_lookback, seq_lookahead, seq_lookback_mark, seq_lookahead_mark
 
     def _apply_temporal_embedding(self, mark_lookback: torch.Tensor, mark_lookahead: torch.Tensor):
@@ -318,7 +318,6 @@ class CustomDatasetWithOverrides(Dataset):
             return torch.cat([pos, pe], dim=-1)
 
         return encode(mark_lookback), encode(mark_lookahead)
-
     
 
 def dump_dataset_to_text(dataset, file_path="dataset_dump.txt", max_samples=None):

@@ -78,13 +78,14 @@ def fedformer_searchspace():
         "lr": tune.loguniform(1e-4, 3e-4),
         "weight_decay": tune.loguniform(1e-6, 1e-4),
         "dropout": tune.uniform(0.0, 0.1),
+        "loss": "MSE",
 
         "norm": True,
-        "seq_len": 1024,
         "horizon": 400,
+        "seq_len": 1600,
         "embed": "timeF",
-        "freq": 'm',
-        "generate_temporal_features": False, # false = dont generate sin/cos time features
+        "freq": 's',
+        "generate_temporal_features": True, # False = dont generate sin/cos time features
 
         "moving_avg": tune.choice([25, 51]),
         "grad_clip": tune.uniform(0.5, 1.5),
@@ -529,10 +530,10 @@ def timemixer_searchspace():
     search_space = {
         # === Core architecture ===
         # d_model is small in paper (16 / 32 / 128 depending on dataset)
-        "d_model": tune.choice([16, 32, 64, 96]),
+        "d_model": tune.choice([16, 32, 64]),
         
         # Number of PDM blocks L (paper uses L=2, ablations show benefits for L=2–4)
-        "e_layers": tune.choice([1, 2, 3, 4]),
+        "e_layers": tune.choice([1, 2, 3]),
 
         # Number of scales M (paper uses M=1 for short-term, M=3 for long-term)
         "num_scales": tune.choice([1, 2, 3]),
@@ -552,7 +553,7 @@ def timemixer_searchspace():
         "moving_avg": tune.choice([25, 51, 101, 201]),  # Smooting over 0.25, 0.5, 1 and 2 seconds
 
         # === Optimization and stabilization ===
-        "batch_size": tune.choice([16, 32, 64, 128]),
+        "batch_size": tune.choice([8, 16, 32]),
         "grad_clip": tune.uniform(0.5, 2.0),
 
         # With Window 2 we get 1600 -> 800.
@@ -568,6 +569,8 @@ def timemixer_searchspace():
         "norm": True,
         "num_epochs": config.max_epochs,
         "patience": tune.choice([10, 15]),
+
+        "freq": "m"
     }
 
     return search_space
