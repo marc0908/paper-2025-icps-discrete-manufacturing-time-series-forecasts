@@ -512,6 +512,12 @@ def run_hyperparameter_optimization(
         """
 
         selected_hyperparams = config["hparams"]
+
+        # --- Constraint Logic for ETSformer etc. ---
+        # If e_layers is set but d_layers isnt, we will set it to the same
+        if "e_layers" in selected_hyperparams and "d_layers" not in selected_hyperparams:
+            selected_hyperparams["d_layers"] = selected_hyperparams["e_layers"]
+
         local_model_config = copy.deepcopy(config["model_config"])
         eval_cfg = copy.deepcopy(config["eval_config"])
         local_data_path = config["data_path"]
