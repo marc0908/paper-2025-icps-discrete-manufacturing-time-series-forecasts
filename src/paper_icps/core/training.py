@@ -48,92 +48,6 @@ class ForecastingModel(Protocol):
     def model_class(self) -> Any:
         ...
 
-
-def _generate_transformer_style_time_features(
-    base_mark: torch.Tensor,  # [B, T, 1]
-    num_features: int,        # = lin.in_features
-) -> torch.Tensor:
-    """
-    Transformer-style sinusoidal positional encoding.
-
-    - Feature 0: raw index (base_mark)
-    - Features 1..: log-spaced sine/cosine frequencies
-      following the standard "Attention is All You Need" formulation.
-    """
-    # Base index as float
-    pos = base_mark.float()          # [B, T, 1]
-    features = [pos]                 # First feature = raw index
-
-    # Remaining dimensions for sinusoidal encoding
-    pe_dims = num_features - 1
-    if pe_dims <= 0:
-        return pos  # Linear layer expects only one feature
-
-    # Number of sine/cosine pairs needed
-    num_pairs = (pe_dims + 1) // 2
-
-    # Classic Transformer scaling:
-    #   div_term = 1 / (10000^(2i/d))
-    # Produces logarithmically spaced frequencies
-    i = torch.arange(0, num_pairs, device=pos.device, dtype=pos.dtype)
-    div_term = torch.exp(-math.log(10000.0) * (2 * i / num_pairs))
-
-    # Phase for each frequency
-    # Broadcasts: [B, T, 1] * [num_pairs] -> [B, T, num_pairs]
-    phase = pos * div_term.view(1, 1, -1)
-
-    sin_feats = torch.sin(phase)
-    cos_feats = torch.cos(phase)
-
-    # Interleave sine and cosine: [sin_0, cos_0, sin_1, cos_1, ...]
-    pe = torch.stack((sin_feats, cos_feats), dim=-1)  # [B, T, num_pairs, 2]
-    pe = pe.view(pos.shape[0], pos.shape[1], -1)      # [B, T, 2*num_pairs]
-
-    # Trim to the exact required number of features
-    pe = pe[:, :, :pe_dims]
-
-    # Concatenate raw index + sinusoidal encoding
-    return torch.cat([pos, pe], dim=-1)
-    
-def _adapt_time_marks_for_temporal_embedding(
-    nn_model: nn.Module,
-    input_mark: torch.Tensor,
-    target_mark: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Applies best-practice temporal encoding for models that support
-    temporal embeddings via a Linear layer.
-
-    - If the temporal embedding layer expects >1 features, the 1-D index
-      is expanded into Transformer-style positional encodings.
-    - Otherwise, the raw index is returned unchanged.
-    """
-    try:
-        enc_emb = getattr(nn_model, "enc_embedding", None)
-        te = getattr(enc_emb, "temporal_embedding", None)
-        lin = getattr(te, "embed", None) if te is not None else None
-
-        # Only transform if a Linear temporal embedding exists
-        if not isinstance(lin, nn.Linear):
-            return input_mark.float(), target_mark.float()
-
-        in_feat = lin.in_features
-
-        # Only expand if the incoming feature dimension is 1
-        if input_mark.size(-1) == 1 and in_feat > 1:
-            new_input_mark = _generate_transformer_style_time_features(
-                input_mark, in_feat
-            )
-            new_target_mark = _generate_transformer_style_time_features(
-                target_mark, in_feat
-            )
-            return new_input_mark, new_target_mark
-        else:
-            return input_mark.float(), target_mark.float()
-
-    except Exception as e:
-        print(f"Warning in _adapt_time_marks: {e}, using fallback.")
-        return input_mark.float(), target_mark.float()
         
 # ---------------------------------------------------------------------------
 # Learning rate schedule (from TFB)
@@ -191,17 +105,15 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
         - learning rate schedule
     """
 
+        # ensure nn_model is initialized
     if model.model is None:
         raise ValueError("Model not initialized. Call the model initializer first.")
+    nn_model = model.model
+
+    # Optional checkpoint restore
     if kwargs.get("use_checkpoint", True) and hasattr(model, "early_stopping"):
         if model.early_stopping.check_point is not None:
-            # Local alias with explicit nn.Module type for linters
-            nn_model = cast(nn.Module, model.model)
             nn_model.load_state_dict(model.early_stopping.check_point)
-        else:
-            nn_model = cast(nn.Module, model.model)
-    else:
-        nn_model = cast(nn.Module, model.model)
 
     # Attach transform to datasets if needed
     if not kwargs.get("already_transformed", False) and getattr(model.config, "norm", False):
@@ -214,10 +126,11 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
 
     # Optional deterministic seeding for workers and shuffling
     base_seed = kwargs.get("seed", None)
-    if base_seed is not None:
-        base_seed = cast(int, base_seed)
 
     def _worker_init_fn(worker_id: int) -> None:
+        """
+        Worker init function to set different random seeds per worker.
+        """
         if base_seed is None:
             return
         seed = base_seed + worker_id
@@ -228,14 +141,13 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
         _np.random.seed(seed)
         _torch.manual_seed(seed)
 
-    data_generator: Optional[torch.Generator] = None
-    if base_seed is not None:
-        try:
-            data_generator = torch.Generator()
-            data_generator.manual_seed(base_seed)
-        except Exception:
-            data_generator = None
+    # DataLoader setup
+    data_generator = (
+        torch.Generator().manual_seed(int(base_seed))
+        if base_seed is not None else None
+    )
 
+    # Use pin_memory if CUDA is available
     use_pin_memory = torch.cuda.is_available()
 
     train_data_loader = DataLoader(
@@ -282,17 +194,23 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
     else:
         raise ValueError(f"Unsupported optimizer: {opt_name}")
 
+    # Device setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # Setup early stopping
     model.early_stopping = common.EarlyStopping(patience=config.patience)
+
+    # Move model to device
     nn_model.to(device)
 
     # AMP: mixed precision
     # Logic: AMP is activated, if:
     # 1. A GPU is available (cuda)
     # 2. And the Config allows it
-    
-    config_use_amp = getattr(config, "use_amp", True) # Default True wenn nicht vorhanden
+
+    print("cuda is available: " + str(torch.cuda.is_available()))
+
+    config_use_amp = getattr(config, "use_amp", True) # default to True
     use_amp = (device.type == "cuda") and config_use_amp
 
     if use_amp:
@@ -316,6 +234,7 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
             train_data_loader.dataset.time_offset = time_offset  # type: ignore
             valid_data_loader.dataset.time_offset = time_offset  # type: ignore
 
+        # Set model to train mode and iterate batches
         nn_model.train()
         for i, (input, target, input_mark, target_mark) in enumerate(train_data_loader):
             optimizer.zero_grad()
@@ -326,26 +245,25 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
                 for feat_idx in range(input.shape[-1]):
                     if torch.isnan(input[:, :, feat_idx]).any():
                         print(f" -> Feature Index {feat_idx} contains NaNs (likely variance=0)")
-                break # Sofort stoppen zum Debuggen
+                raise ValueError("NaNs in input data.")
 
             input = input.to(device)
             target = target.to(device)
             input_mark = input_mark.to(device)
             target_mark = target_mark.to(device)
 
-                        # Adapt time marks ...
-            input_mark, target_mark = _adapt_time_marks_for_temporal_embedding(
-                nn_model, input_mark, target_mark
-            )
 
             loss_importance: Optional[torch.Tensor] = None  # reset every batch
 
-            # --- AMP forward ---
+            # --- Forward pass (AMP-aware) ---
             with torch.cuda.amp.autocast(enabled=use_amp):
                 if config.decoder_input_required:
+                    # Create a zero matrix shaped like the forecast horizon
                     dec_input = torch.zeros_like(
                         target[:, -config.horizon :, :]
                     ).float()
+
+                    # Build decoder input: [past labels] + [zero horizon placeholder]
                     dec_input = (
                         torch.cat(
                             [target[:, : config.label_len, :], dec_input], dim=1
@@ -353,10 +271,13 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
                         .float()
                         .to(device)
                     )
+                    # Forward pass with decoder input
                     output = nn_model(input, input_mark, dec_input, target_mark)
                 elif config.has_loss_importance:
+                    # Forward pass with loss importance
                     output, loss_importance = nn_model(input)
                 else:
+                    # Standard forward pass
                     output = nn_model(input)
 
                 # Focus loss on forecast horizon
@@ -364,15 +285,10 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
                 output_slice = output[:, -config.horizon :, :]
                 loss = criterion(output_slice, target_slice)
 
-                """ if torch.isnan(loss):
-                    print(f"Warning: NaN loss detected at epoch {epoch}, batch {i}. Skipping step.")
-                    optimizer.zero_grad()
-                    continue # Skip this Batch, rescue the Model """
-
                 if getattr(config, "has_loss_importance", False):
-                    loss = loss + loss_importance  # type: ignore[name-defined]
+                    loss = loss + loss_importance
 
-                        # --- Backward + Optimizer Step (AMP-aware) ---
+            # --- Backward pass and Optimizer step ---
             if use_amp:
                 scaler.scale(loss).backward()
 
@@ -519,8 +435,18 @@ def train_model(
     # Task name for TFB internals
     setattr(model.config, "task_name", "short_term_forecast")
 
-    # Let the model perform any internal hyper-parameter logic
-    model.multi_forecasting_hyper_param_tune(data)
+    # --- following code is extraced from TFB's multi_forecasting_hyper_param_tune
+    # TODO check if this step is necessary
+    column_num = data.shape[1]
+    model.config.enc_in = column_num
+    model.config.dec_in = column_num
+    model.config.c_out = column_num
+
+    if model.model_name == "MICN":
+        setattr(model.config, "label_len", model.config.seq_len)
+    else:
+        setattr(model.config, "label_len", model.config.seq_len // 2)
+    # ---
 
     # Initialize underlying PyTorch model
     if hasattr(model, "_init_model"):
@@ -565,6 +491,9 @@ def train_model(
 
     gc.collect()
 
+    generate_temporal_features=getattr(model.config, "generate_temporal_features", False)
+    freq = getattr(model.config, "freq")
+
     # Build datasets
     train_dataset = dataset.CustomDatasetWithOverrides(
         train_data,
@@ -574,6 +503,9 @@ def train_model(
         model.config.label_len,
         model.config.input_sampling,
         stride_samples=sliding_stride,
+        generate_temporal_features=generate_temporal_features,
+        freq=freq,
+
     )
     validate_dataset = dataset.CustomDatasetWithOverrides(
         valid_data,
@@ -583,6 +515,8 @@ def train_model(
         model.config.label_len,
         model.config.input_sampling,
         stride_samples=sliding_stride,
+        generate_temporal_features=generate_temporal_features,
+        freq=freq,
     )
 
     print(f"Train Dataset Size: {len(train_dataset)} samples")

@@ -1,4 +1,5 @@
 from typing import Iterable, List, Optional, Tuple, Callable
+from ..tslib.layers.Embed import FREQ_MAP # Use tslib's frequency map
 
 import numpy as np
 import torch
@@ -13,6 +14,12 @@ class CustomDatasetWithOverrides(Dataset):
 
     For the first part of indices, samples are taken from `orig_data`.
     For the second part, windows are sampled from `override_data` near override events.
+
+    About timemarks:
+    The dimension of the timemarks can be set via tslib's hyperparameter "freq".
+    See FREQ_MAP in tslib/layers/Embed.py for details.
+    If freq is anything other than 'm' meaning more than 1 dimension for the timestamp, it is
+    necessary to enable generate_temporal_features.
 
     Parameters
     ----------
@@ -32,6 +39,10 @@ class CustomDatasetWithOverrides(Dataset):
         Optional preprocessing function applied to each window (e.g., scaling).
     stride_samples : int, default=1
         Step size used when sliding over the virtual index space.
+    generate_temporal_features: bool, default=False
+        Whether to generate temporal embedding features using sin/cos for time marks.
+    freq = 'm', default='m'
+        Frequency string determining the dimension of temporal embeddings.
 
     Returns (per item)
     ------------------
@@ -55,6 +66,8 @@ class CustomDatasetWithOverrides(Dataset):
         input_sampling: int = 1,
         transform: Optional[Callable[[np.ndarray], np.ndarray]] = None,
         stride_samples: int = 1,
+        generate_temporal_features: bool = False,
+        freq: str | None = None,
     ):
         self.orig_data = orig_data
         self.override_data = override_data
@@ -64,6 +77,8 @@ class CustomDatasetWithOverrides(Dataset):
         self.label_length = label_length  # decoder lookback length
         self.input_sampling = input_sampling
         self.stride_samples = max(1, int(stride_samples))
+        self.generate_temporal_features = generate_temporal_features
+        self.freq = freq
 
         # "Virtual" length: conceptually we treat this as orig + override samples
         self.virtual_len = 2 * len(orig_data)
@@ -260,10 +275,49 @@ class CustomDatasetWithOverrides(Dataset):
             + self.time_offset
         ).unsqueeze(-1)
 
+        # Adapt time marks for temporal embedding if needed
+        if self.generate_temporal_features:
+            seq_lookback_mark, seq_lookahead_mark = self._apply_temporal_embedding(
+                seq_lookback_mark, seq_lookahead_mark
+            )
+
+        # always convert to float
         seq_lookback = torch.tensor(seq_lookback, dtype=torch.float32)
         seq_lookahead = torch.tensor(seq_lookahead, dtype=torch.float32)
 
+        seq_lookback_mark = torch.tensor(seq_lookback_mark, dtype=torch.float32)
+        seq_lookahead_mark = torch.tensor(seq_lookahead_mark, dtype=torch.float32)
+        
         return seq_lookback, seq_lookahead, seq_lookback_mark, seq_lookahead_mark
+
+    def _apply_temporal_embedding(self, mark_lookback: torch.Tensor, mark_lookahead: torch.Tensor):
+        F = FREQ_MAP.get(self.freq, None) if self.freq is not None else None
+        if F is None:
+            raise ValueError(f"Invalid Frequency '{self.freq}' use one of {list(FREQ_MAP.keys())}")
+
+        def encode(mark):
+            pos = mark.float()
+
+            if F == 1:
+                return pos
+
+            pe_dims = F - 1
+            num_pairs = (pe_dims + 1) // 2
+
+            i = torch.arange(0, num_pairs, device=pos.device)
+            div = torch.exp(-torch.log(torch.tensor(10000.0)) * (2 * i / num_pairs))
+
+            phase = pos * div.view(1, -1)
+
+            sin = torch.sin(phase)
+            cos = torch.cos(phase)
+
+            pe = torch.stack([sin, cos], dim=-1).reshape(pos.shape[0], -1)
+            pe = pe[:, :pe_dims]
+
+            return torch.cat([pos, pe], dim=-1)
+
+        return encode(mark_lookback), encode(mark_lookahead)
     
 
 def dump_dataset_to_text(dataset, file_path="dataset_dump.txt", max_samples=None):
