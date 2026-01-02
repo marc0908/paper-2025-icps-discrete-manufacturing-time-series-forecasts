@@ -58,39 +58,86 @@ def fedformer_searchspace():
     """
 
     return {
+        # =========================
+        # Core architecture
+        # =========================
+        # 256 ist klarer Sweet Spot, 128 als Kontrollpunkt
+        "d_model": tune.choice([128, 256]),
+
+        # Tiefe bringt wenig, 1–2 ist optimal
         "e_layers": tune.choice([1, 2]),
-        "d_layers": tune.choice([1]),
-        "d_model": tune.choice([64, 128, 256]),
-        "d_ff": tune.choice([256, 512, 1024]),
-        "n_heads": tune.choice([4, 8]),
+        "d_layers": tune.choice([1]),  # 2 hat keinen klaren Vorteil gezeigt
 
-        "modes": tune.choice([16, 32, 48, 64]),
-        "domain": tune.choice(["fourier"]),
+        # FFN: nicht zu groß → Overfitting vermeiden
+        "d_ff": tune.choice([256, 384, 512, 768]),
 
+        # 8 Heads stabil bei d_model ≥ 128
+        "n_heads": tune.choice([8]),
+
+        # =========================
+        # Frequency / decomposition
+        # =========================
+        # Extreme modes bringen Instabilität
+        "modes": tune.choice([32, 48, 64]),
+        "domain": tune.choice(["wavelet"]),
+
+        # MoE: 3–4 ok, aber nicht weiter aufblasen
         "num_experts": tune.choice([3, 4]),
+
+        # Kernel-Sets, die in guten Trials vorkamen
         "expert_kernel_sizes": tune.choice([
-            [7, 12, 14, 24],      
+            [7, 12, 14, 24],
             [24, 48],
             [48, 96],
         ]),
 
-        "batch_size": tune.choice([8, 16, 32]),
-        "lr": tune.loguniform(1e-4, 3e-4),
-        "weight_decay": tune.loguniform(1e-6, 1e-4),
-        "dropout": tune.uniform(0.0, 0.1),
-        "loss": "MSE",
+        # =========================
+        # Optimization (sehr wichtig!)
+        # =========================
+        # Kleine Batches generalisieren besser bei Overrides
+        "batch_size": tune.choice([4, 8, 16]),
 
+        # Enger LR-Bereich um beobachteten Sweet Spot
+        "lr": tune.choice([
+            8e-5,
+            1.0e-4,
+            1.2e-4,
+            1.5e-4,
+            1.8e-4,
+            2.0e-4,
+            2.3e-4,
+        ]),
+
+        # Deutlich stärker regularisieren
+        "weight_decay": tune.choice([
+            1e-4,
+            3e-4,
+            1e-3,
+            3e-3,
+        ]),
+
+        # Dropout nicht zu niedrig!
+        "dropout": tune.uniform(0.05, 0.12),
+
+        "loss": "MAE",
+
+        # =========================
+        # Training stability
+        # =========================
+        "grad_clip": tune.choice([0.5, 1.0, 1.5]),
+        "patience": tune.choice([5]),
+
+        # =========================
+        # Data / temporal setup
+        # =========================
         "norm": True,
         "horizon": 400,
         "seq_len": 1600,
         "embed": "timeF",
-        "freq": 's',
-        "generate_temporal_features": True, # False = dont generate sin/cos time features
-
-        "moving_avg": tune.choice([25, 51]),
-        "grad_clip": tune.uniform(0.5, 1.5),
-        "patience": tune.choice([5, 10]),
+        "freq": "m",
+        "generate_temporal_features": False,
     }
+
 
 
 def autoformer_searchspace(num_vars: int | None = None):
@@ -565,11 +612,10 @@ def timemixer_searchspace():
         # === Fixed — based on your global pipeline ===
         "seq_len": 1600,
         "horizon": 400,
-        "loss": "MSE",
+        "loss": "MAE",
         "norm": True,
         "num_epochs": config.max_epochs,
         "patience": tune.choice([10, 15]),
-
         "freq": "m"
     }
 
