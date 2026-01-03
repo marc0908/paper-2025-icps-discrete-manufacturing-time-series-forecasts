@@ -87,7 +87,7 @@ def fedformer_searchspace():
         "freq": 's',
         "generate_temporal_features": True, # False = dont generate sin/cos time features
 
-        "moving_avg": tune.choice([25, 51]),
+        "moving_avg": tune.choice([1, 3, 5, 7, 11]),
         "grad_clip": tune.uniform(0.5, 1.5),
         "patience": tune.choice([5, 10]),
     }
@@ -126,7 +126,7 @@ def autoformer_searchspace(num_vars: int | None = None):
         # DO NOT USE! decomposition (moving average) window – around k=25 in the paper  [oai_citation:1‡Autoformer.pdf](sediment://file_000000005f3871f4bd01b92c9dbf9c2f)
         # IMPORTANT: Adapted to 100Hz Sampling-Rate
         # 25 samples = 0.25s (too short for trend), 101 = 1s, 301 = 3s
-        "moving_avg": tune.choice([25, 51, 101, 251, 501]),  # TODO: Not sure about smoothing!
+        "moving_avg": tune.choice([1, 3, 5, 7, 11]),  # TODO: Not sure about smoothing!
 
         # Auto-Correlation hyper-parameter c (Top-k periods: k = c * log L)  [oai_citation:2‡Autoformer.pdf](sediment://file_000000005f3871f4bd01b92c9dbf9c2f)
         "c": tune.randint(1, 4),   # {1, 2, 3}
@@ -147,6 +147,12 @@ def autoformer_searchspace(num_vars: int | None = None):
         # paper early-stops within ~10 epochs; keep similar scale  [oai_citation:4‡Autoformer.pdf](sediment://file_000000005f3871f4bd01b92c9dbf9c2f)
         "patience": tune.choice([5, 10, 15]),
         "grad_clip": tune.uniform(0.5, 2.0),
+        "freq": "s",
+        "generate_temporal_features": True,
+
+        # Important for Autoformer!
+        "pred_len": 400, # = horizon
+        "label_len": 800 # = seq_len / 2
     }
 
     return search_space
@@ -422,6 +428,8 @@ def informer_searchspace(num_vars: int | None = None):
 
         # Gradient clipping for stability on long sequences
         "grad_clip": tune.uniform(0.5, 2.0),
+        "freq": "s",
+        "generate_temporal_features": True, # False = dont generate sin/cos time features
     }
 
     return search_space

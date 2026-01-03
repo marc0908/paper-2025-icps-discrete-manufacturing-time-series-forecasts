@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from ..core import common, config, training
+from ..core import common, config, training, dataset
 
 
 def parse_args():
@@ -80,8 +80,10 @@ def generate_forecast(model, data, n_recursion):
     for i in range(n_recursion):
         start_time = time.time()
         generated = common.forecast_custom(
-            model, lookback
-        )  # TODO: for downsampling, pass dec input with full sampling rate
+            model, lookback,
+            use_best_checkpoint=False,
+            move_model=False,
+        )
         time_per_generation.append(time.time() - start_time)
         lookback = np.vstack((lookback[len(generated) :, :], generated))
         generated_results.append(generated)
@@ -151,33 +153,51 @@ class TorchMultiDataset(Dataset):
         return item
 
 
-if __name__ == "__main__":
-    args = parse_args()
+# eval3_train_2nd_pass.py  (add this near the bottom, above if __name__ == "__main__":)
 
-    data = common.load_csv(args.data_path)
-    data_w_overrides = common.load_csv(args.data_path_overrides)
-    model = common.restore_model(args.model_path)
+def run_second_training(
+    model_path: str,
+    data_path: str,
+    data_path_overrides: str,
+    reduction_factor: int = 3,
+    num_epochs: int = 100,
+    learning_rate: float | None = None,
+    patience: int = 10,
+    seed: int | None = None,
+    save_suffix: str = "",
+) -> str:
+    """
+    Loads model from model_path, performs the 2nd-pass training, saves a new model,
+    and returns the new model path.
+    """
+
+    data = common.load_csv(data_path)
+    data_w_overrides = common.load_csv(data_path_overrides)
+    model = common.restore_model(model_path)
+
+    if hasattr(model, "model") and model.model is not None:
+        model.model.eval()
+        model.model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
 
     lookback_len = model.config.seq_len
     generated_len_per_run = model.config.horizon
     lookahead_len = generated_len_per_run
 
     cfg = config.default_eval_config()
-    seed = cfg["strategy_args"]["seed"]
+    if seed is None:
+        seed = cfg["strategy_args"]["seed"]
     common.set_fixed_seed(seed)
 
     train_ratio_in_tv = cfg["strategy_args"]["train_ratio_in_tv"]
     tv_ratio = cfg["strategy_args"]["tv_ratio"]
 
-    train_data, valid_data, test_data = common.split_data(
-        data, tv_ratio, train_ratio_in_tv
-    )
+    train_data, valid_data, _ = common.split_data(data, tv_ratio, train_ratio_in_tv)
     train_data_w_overrides, valid_data_w_overrides, _ = common.split_data(
         data_w_overrides, tv_ratio, train_ratio_in_tv
     )
 
-    n_generated_train = int(len(train_data) // args.reduction_factor)
-    n_generated_valid = int(len(valid_data) // args.reduction_factor)
+    n_generated_train = int(len(train_data) // reduction_factor)
+    n_generated_valid = int(len(valid_data) // reduction_factor)
 
     rng = np.random.default_rng(seed=seed)
 
@@ -192,7 +212,7 @@ if __name__ == "__main__":
         rng.integers(
             low=0,
             high=len(valid_data) - lookback_len - generated_len_per_run,
-            size=int(n_generated_valid),
+            size=n_generated_valid,
         )
     )
 
@@ -200,67 +220,57 @@ if __name__ == "__main__":
     generated_results_valid = []
     n_recursion = 1
 
-    print(f"Generating {n_generated_train} trajectories for training ...")
-    for trajectory_start_idx in trajectory_starts:
-        in_data = train_data[trajectory_start_idx:].values
+    print(f"[eval3] Generating {n_generated_train} trajectories for training ...")
+    for s in trajectory_starts:
+        in_data = train_data[s:].values
         generated = generate_forecast(model, in_data, n_recursion)
         generated_results.append(model.scaler.transform(generated))
 
-    print(f"Generating {n_generated_valid} trajectories for validation ...")
-    for trajectory_start_idx in trajectory_starts_valid:
-        in_data = valid_data[trajectory_start_idx:].values
+    print(f"[eval3] Generating {n_generated_valid} trajectories for validation ...")
+    for s in trajectory_starts_valid:
+        in_data = valid_data[s:].values
         generated = generate_forecast(model, in_data, n_recursion)
         generated_results_valid.append(model.scaler.transform(generated))
 
+    # scale original data
     train_data = common.scaled_dataframe_copy(train_data, model.scaler)
     valid_data = common.scaled_dataframe_copy(valid_data, model.scaler)
-    train_data_w_overrides = common.scaled_dataframe_copy(
-        train_data_w_overrides, model.scaler
-    )
-    valid_data_w_overrides = common.scaled_dataframe_copy(
-        valid_data_w_overrides, model.scaler
-    )
+    train_data_w_overrides = common.scaled_dataframe_copy(train_data_w_overrides, model.scaler)
+    valid_data_w_overrides = common.scaled_dataframe_copy(valid_data_w_overrides, model.scaler)
 
+    # datasets
     train_dataset = MixerDataset(
-        train_data,
-        generated_results,
-        trajectory_starts,
-        lookback_len,
-        generated_len_per_run,
-        model.config.label_len,
+        train_data, generated_results, trajectory_starts,
+        lookback_len, generated_len_per_run,
+        getattr(model.config, "label_len", 0),
     )
     validate_dataset = MixerDataset(
-        valid_data,
-        generated_results_valid,
-        trajectory_starts_valid,
-        lookback_len,
-        generated_len_per_run,
-        model.config.label_len,
+        valid_data, generated_results_valid, trajectory_starts_valid,
+        lookback_len, generated_len_per_run,
+        getattr(model.config, "label_len", 0),
     )
 
-    orig_train_dataset = training.CustomDatasetWithOverrides(
-        train_data,
-        train_data_w_overrides,
-        lookback_len,
-        lookahead_len,
-        model.config.label_len,
+    orig_train_dataset = dataset.CustomDatasetWithOverrides(
+        train_data, train_data_w_overrides,
+        lookback_len, lookahead_len,
+        getattr(model.config, "label_len", 0),
     )
-    orig_validate_dataset = training.CustomDatasetWithOverrides(
-        valid_data,
-        valid_data_w_overrides,
-        lookback_len,
-        lookahead_len,
-        model.config.label_len,
+    orig_validate_dataset = dataset.CustomDatasetWithOverrides(
+        valid_data, valid_data_w_overrides,
+        lookback_len, lookahead_len,
+        getattr(model.config, "label_len", 0),
     )
 
     mixed_train_dataset = TorchMultiDataset(train_dataset, orig_train_dataset)
     mixed_validate_dataset = TorchMultiDataset(validate_dataset, orig_validate_dataset)
 
-    model.config.num_epochs = args.num_epochs
-    model.config.patience = args.patience
-    if args.learning_rate:
-        model.config.lr = args.learning_rate
+    # training hyperparams
+    model.config.num_epochs = num_epochs
+    model.config.patience = patience
+    if learning_rate is not None:
+        model.config.lr = learning_rate
 
+    # train
     training.forecast_fit(
         model,
         mixed_train_dataset,
@@ -270,9 +280,12 @@ if __name__ == "__main__":
         training_progress_callback=callback,
     )
 
-    model_path_wo_ext, _ = os.path.splitext(args.model_path)
+    # save
+    model_path_wo_ext, _ = os.path.splitext(model_path)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    suffix = f"_{save_suffix}" if save_suffix else ""
+    out_path = model_path_wo_ext + f"{suffix}_with_2nd_training_{timestamp}.pt"
+    common.save_model(model, out_path)
+    print("[eval3] Model saved under:", out_path)
 
-    model_save_path = model_path_wo_ext + f"_with_2nd_training_{timestamp}.pt"
-    common.save_model(model, model_save_path)
-    print("Model saved under: ", model_save_path)
+    return out_path

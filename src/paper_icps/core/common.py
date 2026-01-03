@@ -255,7 +255,7 @@ def sum_model_params(model) -> int:
     return sum(p.numel() for p in torch_model.parameters() if p.requires_grad)
 
 
-def forecast_custom(model, history: np.ndarray, use_best_checkpoint : bool = True) -> np.ndarray:
+def forecast_custom(model, history: np.ndarray, use_best_checkpoint : bool = True, move_model: bool = True) -> np.ndarray:
     """
     Run a single-step (or multi-step) forecast using a trained model and a
     given history window. Handles normalization, best-checkpoint restoration,
@@ -281,16 +281,17 @@ def forecast_custom(model, history: np.ndarray, use_best_checkpoint : bool = Tru
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.model.eval()
-    model.model.to(device)
+
+    if move_model:
+        model.model.to(device)
 
     model_forecast_len = config.horizon
     model_history_len = config.seq_len
 
     # Use only the last `model_history_len` timesteps as model input
-    history = torch.tensor(
-        [history[-model_history_len:]], dtype=torch.float
-    ).to(device)
-
+    hist_np = history[-model_history_len:].astype(np.float32, copy=False)
+    history_t = torch.from_numpy(hist_np).unsqueeze(0).to(device)  # (1, T, D)
+    
     result = None
 
     # Backward-compatibility for legacy DUET configs missing these flags
@@ -301,41 +302,40 @@ def forecast_custom(model, history: np.ndarray, use_best_checkpoint : bool = Tru
 
     if model.config.decoder_input_required:
         # Encoder input
-        target = history
+        target = history_t
 
         # Decoder input: last `label_len` encoder steps + zeroed forecast horizon
-        dec_input = torch.zeros_like(target[:, -config.horizon :, :]).float()
-        dec_input = (
-            torch.cat([target[:, -config.label_len :, :], dec_input], dim=1)
-            .float()
-            .to(device)
-        )
+        dec_zeros = torch.zeros((1, config.horizon, target.size(-1)), device=device, dtype=target.dtype)
+        dec_input = torch.cat([target[:, -config.label_len:, :], dec_zeros], dim=1)
+        
         # Simple positional/time indices as "time marks"
-        history_mark = torch.arange(0, model_history_len).unsqueeze(0).unsqueeze(-1)
-        dec_input_mark = (
-            torch.arange(
+        cache = getattr(model, "_forecast_cache", {})
+        key = (model_history_len, config.label_len, model_forecast_len, device)
+
+        if key not in cache:
+            history_mark = torch.arange(0, model_history_len, device=device).unsqueeze(0).unsqueeze(-1)
+            dec_input_mark = torch.arange(
                 model_history_len - config.label_len,
                 model_history_len + model_forecast_len,
-            )
-            .unsqueeze(0)
-            .unsqueeze(-1)
-        )
+                device=device
+            ).unsqueeze(0).unsqueeze(-1)
+            cache[key] = (history_mark, dec_input_mark)
+            model._forecast_cache = cache
 
-        with torch.no_grad():
-            history_mark = history_mark.to(device)
-            dec_input_mark = dec_input_mark.to(device)
+        history_mark, dec_input_mark = cache[key]
 
+        with torch.inference_mode():
             # DUET-style forward: (enc, enc_mark, dec, dec_mark)
-            result = model.model(history, history_mark, dec_input, dec_input_mark)
+            result = model.model(history_t, history_mark, dec_input, dec_input_mark)
 
     elif model.config.has_loss_importance:
         # Some models return (output, extra_loss_info)
-        with torch.no_grad():
-            result, _ = model.model(history)
+        with torch.inference_mode():
+            result, _ = model.model(history_t)
     else:
         # Standard forward: output = model(history)
-        with torch.no_grad():
-            result = model.model(history)
+        with torch.inference_mode():
+            result = model.model(history_t)
 
     # Remove batch dimension and move back to NumPy
     result = result.cpu().numpy()[0]

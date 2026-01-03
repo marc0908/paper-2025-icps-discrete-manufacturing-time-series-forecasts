@@ -1,35 +1,27 @@
 import numpy as np
+import torch
 import matplotlib.pyplot as pyplot
 
+from . import eval_common
 from ..core import common, config
-from .eval_common import forecast_and_stats, create_mae_table_row, parse_args
-
-def print_latex_table(data, results, stepsize=1):
-    def format_values(mean_val, std_val):
-        return f"${mean_val:.3f}$"  # \pm{std_val:.2f}$"
-
-    model_name_space = [" "]
-    any_model_name = next(iter(results))
-    n_recursion = len(results[any_model_name])
-    header = ["Iter."] + [str(n + 1) for n in range(0, n_recursion, stepsize)]
-    tabular_start = "\\begin{tabular}{", "r", "c" * (len(header) - 1), "}"
-    mae_mse_row = " & ".join(["Model/Metric"] + ["MAE"] * (len(header) - 1)) + "\\\\"
-    print("".join(tabular_start))
-    print("&".join(header) + "\\\\")
-    print(mae_mse_row)
-    sorted_results = sorted(results.items(), key=lambda item: item[-1][0])
-
-    for model_name, value_sets in sorted_results:
-        row = [model_name]
-        for mean_val, std_val in value_sets[::stepsize]:
-            row.append(format_values(mean_val, std_val))
-        print(" & ".join(row) + "\\\\")
-    print("\\end{tabular}")
+from .eval_common import forecast_and_stats, create_mae_table_row, parse_args, print_latex_table_recursive
 
 
 def eval_model(modelname, modelpath, data, n_runs=10000):
     model = common.restore_model(modelpath)
-    print("========= ", model_name)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.model.to(device)
+    model.model.eval()
+
+    # Load best checkpoint ONCE (if present)
+    if hasattr(model, "early_stopping") and model.early_stopping.check_point is not None:
+        model.model.load_state_dict(model.early_stopping.check_point)
+
+    # store device for reuse (optional but clean)
+    model._eval_device = device
+
+    print("========= ", modelname)
     print("Model scaler (must match):", model.scaler)
     print("Model parameter count: ", common.sum_model_params(model))
 
@@ -97,7 +89,7 @@ def plot_stats(stats):
     W = 4  # Figure width in inches, approximately A4-width - 2*1.25in margin
     pyplot.rcParams.update(
         {
-            "text.usetex": True,
+            "text.usetex": eval_common.USE_LATEX,
             "text.latex.preamble": r"\usepackage{amsmath}"
             + "\n"
             + r"\usepackage{lmodern}",
@@ -153,6 +145,6 @@ if __name__ == "__main__":
         results[model_name] = result_row
         results_med_quarts[model_name] = median_w_quarts
 
-    print_latex_table(data, results, stepsize=1)
-    print_latex_table(data, results, stepsize=20)
+    print_latex_table_recursive(data, results, stepsize=1)
+    print_latex_table_recursive(data, results, stepsize=20)
     plot_stats(results_med_quarts)

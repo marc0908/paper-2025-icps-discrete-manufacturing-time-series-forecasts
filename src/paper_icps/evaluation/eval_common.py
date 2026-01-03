@@ -80,35 +80,6 @@ name_est_dict = {
     k: v.replace("$", "$\\hat{")[:-1] + "}$" for k, v in name_dict.items()
 }
 
-def _init_label_dicts():
-    """Return name_dict variants depending on whether LaTeX is enabled."""
-    if USE_LATEX:
-        return {
-            "Voltage0": "Voltage $U_0$",
-            "Voltage1": "Voltage $U_1$",
-            "PitchDot": "$\\dot{\\varTheta}$",
-            "YawDot": "$\\dot{\\varPsi}$",
-            "Pitch": "Pitch $\\varTheta$",
-            "Yaw": "Yaw $\\varPsi$",
-            "TargetPitch": "Target $\\varTheta_T$",
-            "TargetYaw": "Target $\\varPsi_T$",
-            "Override": "Override",
-        }
-    else:
-        # Mathtext-safe equivalents (varTheta/varPsi replaced)
-        return {
-            "Voltage0": "Voltage $U_0$",
-            "Voltage1": "Voltage $U_1$",
-            "PitchDot": "$\\dot{\\Theta}$",
-            "YawDot": "$\\dot{\\Psi}$",
-            "Pitch": "Pitch $\\Theta$",
-            "Yaw": "Yaw $\\Psi$",
-            "TargetPitch": "Target $\\Theta_T$",
-            "TargetYaw": "Target $\\Psi_T$",
-            "Override": "Override",
-        }
-
-
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-path", required=True, help="Path to dataset CSV")
@@ -431,8 +402,11 @@ def forecast_and_stats(model, data, n_recursion):
     for i in range(n_recursion):
         start_time = time.time()
         generated = common.forecast_custom(
-            model, lookback
-        )  # TODO: for downsampling, pass dec input with full sampling rate
+            model,
+            lookback,
+            use_best_checkpoint=False,   # already loaded once
+            move_model=False,            # already moved once
+        )
         time_per_generation.append(time.time() - start_time)
         lookback = np.vstack((lookback[len(generated) :, :], generated))
         generated_results.append(generated)
@@ -490,3 +464,92 @@ def print_plain_table(data, results):
         print(" | ".join(row))
 
     print("=" * (sum(col_widths) + len(col_widths) * 3))
+
+def print_plain_table_average_only(data, results):
+    """
+    Plain-text summary: average MAE/MSE per model (overall),
+    consistent with the average-only LaTeX table idea.
+    """
+    def extract_overall(row):
+        # row is what create_mae_mse_table_row returns:
+        #   [ (mae_mean, mae_std, mse_mean, mse_std), ..., [avg_mae_mean, avg_mae_std, avg_mse_mean, avg_mse_std] ]
+        if isinstance(row, (list, tuple)) and len(row) > 0:
+            last = row[-1]
+
+            # Case A: avg is stored as 4-values list
+            if isinstance(last, (list, tuple)) and len(last) == 4:
+                avg_mae_mean, avg_mae_std, avg_mse_mean, avg_mse_std = last
+                return float(avg_mae_mean), float(avg_mse_mean)
+
+            # Case B: avg stored as 2-values (mae, mse)
+            if isinstance(last, (list, tuple)) and len(last) == 2:
+                mae, mse = last
+                return float(mae), float(mse)
+
+        # Case C: dict style (not used in your current code, but safe)
+        if isinstance(row, dict):
+            if "avg" in row and isinstance(row["avg"], (list, tuple)) and len(row["avg"]) == 2:
+                mae, mse = row["avg"]
+                return float(mae), float(mse)
+            if "avg" in row and isinstance(row["avg"], (list, tuple)) and len(row["avg"]) == 4:
+                avg_mae_mean, _, avg_mse_mean, _ = row["avg"]
+                return float(avg_mae_mean), float(avg_mse_mean)
+
+        raise ValueError(f"Cannot extract overall avg MAE/MSE from result row of type {type(row)}: {row}")
+    # Sort by MAE ascending
+    sortable = []
+    for model_name, row in results.items():
+        mae, mse = extract_overall(row)
+        sortable.append((model_name, mae, mse))
+    sortable.sort(key=lambda x: x[1])
+
+    # Print
+    print("\nModel (override eval) |   MAE   |   MSE")
+    print("----------------------+---------+---------")
+    for model_name, mae, mse in sortable:
+        print(f"{model_name:21s} | {mae:7.3f} | {mse:7.3f}")
+    print()
+
+def print_latex_table_recursive(data, results, stepsize=1):
+    def format_values(mean_val, std_val):
+        return f"${mean_val:.3f}$"  # \pm{std_val:.2f}$"
+
+    model_name_space = [" "]
+    any_model_name = next(iter(results))
+    n_recursion = len(results[any_model_name])
+    header = ["Iter."] + [str(n + 1) for n in range(0, n_recursion, stepsize)]
+    tabular_start = "\\begin{tabular}{", "r", "c" * (len(header) - 1), "}"
+    mae_mse_row = " & ".join(["Model/Metric"] + ["MAE"] * (len(header) - 1)) + "\\\\"
+    print("".join(tabular_start))
+    print("&".join(header) + "\\\\")
+    print(mae_mse_row)
+    sorted_results = sorted(results.items(), key=lambda item: item[-1][0])
+
+    for model_name, value_sets in sorted_results:
+        row = [model_name]
+        for mean_val, std_val in value_sets[::stepsize]:
+            row.append(format_values(mean_val, std_val))
+        print(" & ".join(row) + "\\\\")
+    print("\\end{tabular}")
+
+def print_plain_table_recursive(results, stepsize=1, precision=3):
+    # results: dict[str, list[tuple(mean,std)]]
+    any_model = next(iter(results))
+    n_rec = len(results[any_model])
+    header = ["Model"] + [str(i+1) for i in range(0, n_rec, stepsize)]
+
+    widths = [max(10, len(h)) for h in header]
+    print("\n" + "=" * (sum(widths) + 3 * (len(widths)-1)))
+    print(" | ".join(h.ljust(w) for h,w in zip(header, widths)))
+    print("-" * (sum(widths) + 3 * (len(widths)-1)))
+
+    # sort by first-step MAE mean
+    sorted_items = sorted(results.items(), key=lambda kv: kv[1][0][0])
+
+    for name, seq in sorted_items:
+        row = [name.ljust(widths[0])]
+        for (m,s) in seq[::stepsize]:
+            row.append(f"{m:.{precision}f}".ljust(10))
+        print(" | ".join(row))
+
+    print("=" * (sum(widths) + 3 * (len(widths)-1)))
