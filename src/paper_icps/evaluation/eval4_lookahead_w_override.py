@@ -1,7 +1,13 @@
 import numpy as np
 
 from ..core import common, config
-from .eval_common import forecast_and_stats, plot_generated_tight, create_mae_mse_table_row, parse_args, print_latex_table_average_only
+from .eval_common import (
+    forecast_and_stats, 
+    plot_generated_tight, 
+    create_mae_mse_table_row, 
+    parse_args, 
+    print_latex_table_average_only
+    )
 
 
 def find_trajectory_override_ranges(arr):
@@ -24,7 +30,7 @@ def find_trajectory_override_ranges(arr):
 def eval_model(modelname, modelpath, data, n_runs):
     model = common.restore_model(modelpath)
 
-    print("========= ", model_name)
+    print("========= ", modelname)
     print("Model scaler (must match):", model.scaler)
     print("Model parameter count: ", common.sum_model_params(model))
 

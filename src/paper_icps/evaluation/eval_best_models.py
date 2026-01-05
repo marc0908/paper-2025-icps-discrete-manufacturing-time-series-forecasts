@@ -9,10 +9,14 @@ the single-lookahead evaluation pipeline.
 """
 
 import traceback
-from ..core import common
-from .eval1_single_lookahead import eval_model
 import matplotlib
 from typing import Dict, Optional, List
+
+from ..core import common
+from . import eval1_single_lookahead as eval1
+from . import eval2_recursive_lookahead as eval2
+from . import eval3_train_2nd_pass as eval3
+from . import eval4_lookahead_w_override as eval4
 
 import os
 import glob
@@ -100,13 +104,24 @@ def find_best_trials(experiment_dir, metric="val_loss", mode="min", top_k=3):
 def evaluate_best_models(
         experiment_name: str, 
         data_path: str, 
+        data_path_override: str,
         top_k: int = 3, 
         n_runs: int = 100,
         experiment_path: Optional[str] = None,
+        eval_mode: str = "1"
         ):
     """Find and evaluate the best models for a given experiment."""
 
-    if experiment_name != None:
+    # runtime check to see if right data is provided
+    if eval_mode == "1" and not data_path:
+       raise ValueError("--data-path is required for eval-mode=1")
+    if eval_mode == "4" and not data_path_override:
+        raise ValueError("--data-path-override is required for eval-mode=4")
+
+    if eval_mode == "3" and (not data_path or not data_path_override):
+        raise ValueError("--data-path and --data-path-override are required for eval-mode=3")
+
+    if experiment_path is not None:
         exp_dir = str(experiment_path)
     else:
         base_dir = os.path.expanduser("~/ray_results")
@@ -115,14 +130,69 @@ def evaluate_best_models(
     if not os.path.exists(exp_dir):
             raise FileNotFoundError(f"Experiment directory not found: {exp_dir}")
     
-    print(f"\n=== Evaluating Best Models for Experiment: {experiment_name} ===")
-
-    # Load dataset once
-    data = common.load_csv(data_path)
+    print(f"\n=== Evaluating Best Models for Experiment: {experiment_name} (mode {eval_mode}) ===")
 
     # Find best trials by val_loss
     best_trials = find_best_trials(exp_dir, top_k=top_k)
 
+    match eval_mode:
+        case "1":
+            data = common.load_csv(data_path)
+            printer = eval_common.print_plain_table if args.plain else eval_common.print_latex_table
+            eval_single_lookahead(best_trials, data, eval1.eval_model, printer, n_runs)
+        case "2":
+            data = common.load_csv(data_path)
+            eval_recursive(best_trials, data, n_runs, stepsize=args.stepsize, plot=args.plot)
+        case "3":
+            # Second training pass for the best trials, then optionally evaluate them
+            retrained = []
+
+            for i, trial in enumerate(best_trials, start=1):
+                ckpt = trial["checkpoint"]
+                if not ckpt:
+                    print(f"No checkpoint for trial {trial['trial_id']}")
+                    continue
+
+                print(f"\n[eval3] 2nd-pass training for Trial_{i} ({trial['trial_id']})")
+                print(f"  Base checkpoint: {ckpt}")
+
+                try:
+                    new_ckpt = eval3.run_second_training(
+                        model_path=ckpt,
+                        data_path=data_path,
+                        data_path_overrides=data_path_override,
+                        reduction_factor=args.reduction_factor,
+                        num_epochs=args.num_epochs,
+                        learning_rate=args.learning_rate,
+                        patience=args.patience,
+                        save_suffix=f"Trial_{i}",
+                    )
+                    retrained.append(
+                        {"trial_id": trial["trial_id"], "config": trial["config"], "checkpoint": new_ckpt}
+                    )
+                except Exception as e:
+                    print(f"[eval3] second training failed for {ckpt}: {e}")
+                    traceback.print_exc()
+
+            if args.eval_after == "none":
+                print("\n[eval3] Done. Retrained checkpoints:")
+                for t in retrained:
+                    print(" -", t["checkpoint"])
+                return
+        case "4":
+            data = common.load_csv(data_path_override)
+            printer = eval_common.print_plain_table_average_only if args.plain else eval_common.print_latex_table_average_only
+            eval_single_lookahead(best_trials, data, eval4.eval_model, printer, n_runs)
+        case _:
+            raise ValueError(f"Unknown eval_mode={eval_mode}")
+    
+def eval_single_lookahead(
+        best_trials,
+        data,
+        eval_fn,
+        table_printer,
+        n_runs: int = 10000,
+    ):
     results = {}
 
     for i, trial in enumerate(best_trials, start=1):
@@ -138,20 +208,34 @@ def evaluate_best_models(
               f"dropout={trial['config'].get('config/dropout', 0):.4f}")
 
         try:
-            result_row = eval_model(
-                f"Trial_{i}", model_path, data, n_runs=n_runs
-            )
+            result_row = eval_fn(f"Trial_{i}", model_path, data, n_runs)
             results[f"Trial_{i}"] = result_row
         except Exception as e:
             print(f"⚠️ Evaluation failed for {model_path}: {e}")
             traceback.print_exc()
 
     print("\n=== Evaluation Summary ===")
-    if args.plain:
-        eval_common.print_plain_table(data, results)
-    else:
-        eval_common.print_latex_table(data, results)
+    table_printer(data, results)
 
+def eval_recursive(best_trials, data, n_runs, stepsize=1, plot=False):
+    results_table = {}
+    results_quarts = {}
+
+    for i, trial in enumerate(best_trials, start=1):
+        name = f"Trial_{i}"
+        row, quarts = eval2.eval_model(name, trial["checkpoint"], data, n_runs=n_runs)
+        results_table[name] = row
+        results_quarts[name] = quarts
+
+    # print
+    if args.plain:
+        eval_common.print_plain_table_recursive(results_table, stepsize=stepsize)
+    else:
+        eval_common.print_latex_table_recursive(data, results_table, stepsize=stepsize)
+
+    # plot optional
+    if plot:
+        eval2.plot_stats(results_quarts)
 
 if __name__ == "__main__":
     import argparse
@@ -159,7 +243,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate best models from Ray Tune results")
     parser.add_argument("--experiment", required=True, help="Name of the experiment (e.g., TimeXer-Tuning)")
     parser.add_argument("--experiment-path", required=False, help="Path to Experiment (autoamtically found through experiment name)")
-    parser.add_argument("--data-path", required=True, help="Path to dataset CSV or ZIP")
+    parser.add_argument("--data-path", required=False, help="Path to dataset CSV or ZIP")
+    parser.add_argument("--data-path-override", required=False, help="Path to dataset with overrides CSV or ZIP")
     parser.add_argument("--top-k", type=int, default=3, help="Number of best models to evaluate")
     parser.add_argument("--n-runs", type=int, default=100, help="Number of random test runs for evaluation")
     parser.add_argument("--enable-latex", action="store_true", help="Use LaTeX for plot rendering (requires local LaTeX install)")
@@ -168,6 +253,26 @@ if __name__ == "__main__":
         action="store_true",
         help="Print a plain text table instead of LaTeX table (useful for clusters)."
     )
+    parser.add_argument(
+        "--eval-mode",
+        choices=["1", "2", "3", "4"],
+        default="1",
+        help="Which evaluation pipeline to run: "
+            "1=single lookahead, 2=recursive, 3=2nd-pass training, 4=override lookahead",
+    )
+    parser.add_argument("--stepsize", type=int, default=1, help="Only for eval-mode=2 table step sampling")
+    parser.add_argument("--plot", action="store_true", help="Only for eval-mode=2: plot median + quartile band")
+    parser.add_argument("--reduction-factor", type=int, default=3, help="Only for eval-mode=3")
+    parser.add_argument("--num-epochs", type=int, default=100, help="Only for eval-mode=3")
+    parser.add_argument("--learning-rate", type=float, default=None, help="Only for eval-mode=3")
+    parser.add_argument("--patience", type=int, default=10, help="Only for eval-mode=3")
+    parser.add_argument(
+        "--eval-after",
+        choices=["none", "1", "4"],
+        default="1",
+        help="Only for eval-mode=3: evaluate the retrained checkpoints with eval1 or eval4.",
+    )
+
 
     args = parser.parse_args()
 
@@ -205,7 +310,9 @@ if __name__ == "__main__":
     evaluate_best_models(
         experiment_name=args.experiment,
         data_path=args.data_path,
+        data_path_override=args.data_path_override,
         top_k=args.top_k,
         n_runs=args.n_runs,
-        experiment_path=args.experiment_path
+        experiment_path=args.experiment_path,
+        eval_mode=args.eval_mode,
     )
