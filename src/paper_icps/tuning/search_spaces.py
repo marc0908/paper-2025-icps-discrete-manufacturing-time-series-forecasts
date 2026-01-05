@@ -298,7 +298,7 @@ def patchtst_searchspace():
         # === Fixed training control (match your pipeline) ===
         "seq_len": 1600,
         "horizon": 400,
-        "loss": "MSE",
+        "loss": "MAE",
         "num_epochs": config.max_epochs,
         "patience": tune.choice([10, 15, 20]),  # similar to other big models
         # PatchTST itself doesn’t use moving-average decomposition, but some of infra
@@ -665,6 +665,8 @@ def etsformer_searchspace():
         "patience": tune.choice([5, 10, 15]),
         "moving_avg": tune.choice([1, 3, 5, 7, 11]),  # TODO: Not sure about smoothing!
         "grad_clip": tune.uniform(0.5, 2.0),
+
+        "freq": "m"
     }
 
     return search_space
