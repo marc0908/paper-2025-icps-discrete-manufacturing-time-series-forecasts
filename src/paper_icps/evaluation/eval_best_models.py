@@ -24,27 +24,35 @@ import pandas as pd
 
 def load_all_experiments(experiment_dir, metric="val_loss", mode="min"):
     """
-    Load all Ray Tune trials by scanning subfolders for result.json files,
+    Load all Ray Tune trials by recursively scanning for result.json files,
     combining their contents into a single DataFrame.
     """
     all_rows = []
 
-    # iterate over all trial subfolders
-    for trial_dir in glob.glob(os.path.join(experiment_dir, "*")):
-        result_path = os.path.join(trial_dir, "result.json")
-        if not os.path.exists(result_path):
-            continue
+    # Recursively find all result.json files
+    result_files = glob.glob(
+        os.path.join(experiment_dir, "**", "result.json"),
+        recursive=True,
+    )
+
+    for result_path in result_files:
+        trial_dir = os.path.dirname(result_path)
 
         try:
             # Read result.json — may have multiple lines (each line = 1 iteration)
             df = pd.read_json(result_path, lines=True)
             if df.empty:
                 continue
+
             # Keep only the last reported metric (latest training step)
             last_row = df.tail(1).copy()
-            last_row["trial_id"] = os.path.basename(trial_dir).split("_")[1]
+
+            # Robust trial id (folder name, no assumptions about format)
+            last_row["trial_id"] = os.path.basename(trial_dir)
             last_row["trial_dir"] = trial_dir
+
             all_rows.append(last_row)
+
         except Exception as e:
             print(f"⚠️ Could not read {result_path}: {e}")
 
@@ -53,6 +61,7 @@ def load_all_experiments(experiment_dir, metric="val_loss", mode="min"):
 
     combined_df = pd.concat(all_rows, ignore_index=True)
     combined_df = combined_df.sort_values(metric, ascending=(mode == "min"))
+
     print(f"✅ Loaded {len(combined_df)} total trials from {experiment_dir}")
     return combined_df
 
