@@ -811,7 +811,7 @@ def assemble_setup(setup_name: str):
             config.model_config(
                 "paper_icps.tslib.models.PatchTST.Model",
                 "transformer_adapter",
-                decoder_input_required=False,
+                decoder_input_required=True,
                 has_loss_importance=False,
             ),
             patchtst_searchspace(),
