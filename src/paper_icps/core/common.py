@@ -313,11 +313,12 @@ def forecast_custom(model, history: np.ndarray, use_best_checkpoint : bool = Tru
         key = (model_history_len, config.label_len, model_forecast_len, device)
 
         if key not in cache:
-            history_mark = torch.arange(0, model_history_len, device=device).unsqueeze(0).unsqueeze(-1)
+            history_mark = torch.arange(0, model_history_len, device=device, dtype=torch.float32).unsqueeze(0).unsqueeze(-1)
             dec_input_mark = torch.arange(
                 model_history_len - config.label_len,
                 model_history_len + model_forecast_len,
-                device=device
+                device=device,
+                dtype=torch.float32
             ).unsqueeze(0).unsqueeze(-1)
             cache[key] = (history_mark, dec_input_mark)
             model._forecast_cache = cache
