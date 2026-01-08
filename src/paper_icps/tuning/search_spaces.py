@@ -134,7 +134,7 @@ def fedformer_searchspace():
         "horizon": 400,
         "seq_len": 1600,
         "embed": "timeF",
-        "freq": 's',
+        "freq": 'm',
         "generate_temporal_features": True, # False = dont generate sin/cos time features
 
         "moving_avg": tune.choice([1, 3, 5, 7, 11]),
