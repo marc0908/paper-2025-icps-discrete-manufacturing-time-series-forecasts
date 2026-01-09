@@ -21,8 +21,31 @@ from . import eval4_lookahead_w_override as eval4
 import os
 import glob
 import pandas as pd
+import json
+from pathlib import Path
 
-def load_all_experiments(experiment_dir, metric="val_loss", mode="min"):
+def resolve_model_name_from_meta(checkpoint_path: str, fallback: str) -> str:
+    """
+    Resolve a human-readable model name from meta.json.
+    Fallback is used if meta.json is missing or malformed.
+    """
+    ckpt = Path(checkpoint_path)
+
+    # Ray layout: trial_dir/checkpoint_xxx/...
+    trial_dir = ckpt.parent.parent if ckpt.is_file() else ckpt.parent
+    meta_path = trial_dir / "meta.json"
+
+    if meta_path.exists():
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+            return meta.get("model_setup", fallback)
+        except Exception:
+            pass
+
+    return fallback
+
+def load_all_experiments(experiment_dir, metric="val_loss", mode="min") -> pd.DataFrame:
     """
     Load all Ray Tune trials by recursively scanning for result.json files,
     combining their contents into a single DataFrame.
@@ -217,8 +240,11 @@ def eval_single_lookahead(
               f"dropout={trial['config'].get('config/dropout', 0):.4f}")
 
         try:
-            result_row = eval_fn(f"Trial_{i}", model_path, data, n_runs)
-            results[f"Trial_{i}"] = result_row
+            fallback = f"Trial_{i}"
+            model_name = resolve_model_name_from_meta(model_path, fallback)
+
+            result_row = eval_fn(model_name, model_path, data, n_runs)
+            results[model_name] = result_row
         except Exception as e:
             print(f"⚠️ Evaluation failed for {model_path}: {e}")
             traceback.print_exc()
@@ -231,10 +257,14 @@ def eval_recursive(best_trials, data, n_runs, stepsize=1, plot=False):
     results_quarts = {}
 
     for i, trial in enumerate(best_trials, start=1):
-        name = f"Trial_{i}"
+        fallback = f"Trial_{i}"
+        name = resolve_model_name_from_meta(trial["checkpoint"], fallback)
+
         row, quarts = eval2.eval_model(name, trial["checkpoint"], data, n_runs=n_runs)
+
         results_table[name] = row
         results_quarts[name] = quarts
+
 
     # print
     if args.plain:
