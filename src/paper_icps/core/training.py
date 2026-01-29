@@ -246,12 +246,16 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
                     if torch.isnan(input[:, :, feat_idx]).any():
                         print(f" -> Feature Index {feat_idx} contains NaNs (likely variance=0)")
                 raise ValueError("NaNs in input data.")
+            if torch.isnan(input_mark).any():
+                raise ValueError("NaNs found in input_mark (time features).")
+
+            if torch.isnan(target_mark).any():
+                raise ValueError("NaNs found in target_mark (time features).")
 
             input = input.to(device)
             target = target.to(device)
             input_mark = input_mark.to(device)
             target_mark = target_mark.to(device)
-
 
             loss_importance: Optional[torch.Tensor] = None  # reset every batch
 
@@ -279,6 +283,13 @@ def forecast_fit(model: ForecastingModel, train_dataset, validate_dataset, **kwa
                 else:
                     # Standard forward pass
                     output = nn_model(input)
+
+                # Numerical stability check
+                if torch.isnan(output).any() or torch.isinf(output).any():
+                    raise RuntimeError(
+                        "NaN/Inf detected in model output (forward pass). "
+                        "Model is numerically unstable for this configuration."
+                    )
 
                 # Focus loss on forecast horizon
                 target_slice = target[:, -config.horizon :, :]

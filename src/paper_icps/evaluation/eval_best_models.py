@@ -83,6 +83,11 @@ def load_all_experiments(experiment_dir, metric="val_loss", mode="min") -> pd.Da
         raise RuntimeError(f"No valid result.json files found in {experiment_dir}")
 
     combined_df = pd.concat(all_rows, ignore_index=True)
+
+    # force metric to numeric, invalid values -> NaN -> drop
+    combined_df[metric] = pd.to_numeric(combined_df[metric], errors="coerce")
+    combined_df = combined_df.dropna(subset=[metric])
+
     combined_df = combined_df.sort_values(metric, ascending=(mode == "min"))
 
     print(f"✅ Loaded {len(combined_df)} total trials from {experiment_dir}")
@@ -244,7 +249,7 @@ def eval_single_lookahead(
             model_name = resolve_model_name_from_meta(model_path, fallback)
 
             result_row = eval_fn(model_name, model_path, data, n_runs)
-            results[model_name] = result_row
+            results[f"{model_name}_top{i}"] = result_row
         except Exception as e:
             print(f"⚠️ Evaluation failed for {model_path}: {e}")
             traceback.print_exc()
@@ -259,6 +264,7 @@ def eval_recursive(best_trials, data, n_runs, stepsize=1, plot=False):
     for i, trial in enumerate(best_trials, start=1):
         fallback = f"Trial_{i}"
         name = resolve_model_name_from_meta(trial["checkpoint"], fallback)
+        name = f"{name}_top{i}"
 
         row, quarts = eval2.eval_model(name, trial["checkpoint"], data, n_runs=n_runs)
 

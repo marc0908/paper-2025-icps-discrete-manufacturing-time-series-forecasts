@@ -274,34 +274,31 @@ def patchtst_searchspace():
     search_space = {
         # === Core transformer capacity ===
         # Paper uses D=128, H=16, 3 layers on large datasets; smaller on tiny ones.  [oai_citation:3‡PatchTST.pdf](sediment://file_00000000345071f48eacecf48aff9fd0)
-        "d_model": tune.choice([64, 128, 256]),
-        "e_layers": tune.choice([2, 3, 4]),
+        "d_model": tune.choice([64, 128]),
+        "e_layers": tune.choice([2, 3]),
         # ensure d_model % n_heads == 0 for all combos
-        "n_heads": tune.choice([4, 8, 16]),
+        "n_heads": tune.choice([4, 8]),
 
         # FFN width ~ 2–4× d_model (paper uses D=128, F=256=2×D).  [oai_citation:4‡PatchTST.pdf](sediment://file_00000000345071f48eacecf48aff9fd0)
-        "d_ff": tune.choice([256, 512, 1024]),
+        "d_ff": tune.choice([128, 256]),
 
         # === Patching hyperparameters ===
         # Paper default: P=16, S=8; ablation shows P in [4, 40] works and isn’t super sensitive.  [oai_citation:5‡PatchTST.pdf](sediment://file_00000000345071f48eacecf48aff9fd0)
-        "patch_len": tune.choice([8, 12, 16, 24]),
+        "patch_len": tune.choice([8, 16, 32]),
         # stride controls overlap; S=P/2 is the paper’s default when P=16.  [oai_citation:6‡PatchTST.pdf](sediment://file_00000000345071f48eacecf48aff9fd0)
-        "stride": tune.choice([4, 8, 12]),
+        "stride": tune.choice([4, 8, 16]),
 
         # === Learning & regularization ===
         # They typically use Adam with lr around 1e-4–1e-3 and dropout≈0.2.  [oai_citation:7‡PatchTST.pdf](sediment://file_00000000345071f48eacecf48aff9fd0)
-        "lr": tune.loguniform(1e-5, 3e-3),
-        "dropout": tune.uniform(0.05, 0.30),
-        "weight_decay": tune.loguniform(1e-6, 1e-3),
-
+        "lr": tune.loguniform(3e-5, 3e-4),
+        "dropout": tune.uniform(0.1, 0.3),
+        "weight_decay": tune.loguniform(1e-5, 1e-3),
         "batch_size": tune.choice([16, 32, 64]),
-
-        # gradient clipping like other TS transformers
-        "grad_clip": tune.uniform(0.5, 2.0),
+        "grad_clip": tune.uniform(0.5, 1.5),
 
         # === PatchTST-specific switches ===
         # Channel-independent is the whole point of PatchTST; - but colides with our question  [oai_citation:8‡PatchTST.pdf](sediment://file_00000000345071f48eacecf48aff9fd0)
-        "channel_independence": tune.choice([True, False]),
+        "channel_independence": tune.choice([True]),
         # We use instance-style normalization per series as in the paper  [oai_citation:9‡PatchTST.pdf](sediment://file_00000000345071f48eacecf48aff9fd0)
         "norm": True,
 
@@ -479,7 +476,7 @@ def informer_searchspace(num_vars: int | None = None):
 
         # Gradient clipping for stability on long sequences
         "grad_clip": tune.uniform(0.5, 2.0),
-        "freq": "s",
+        "freq": "m",
         "generate_temporal_features": True, # False = dont generate sin/cos time features
     }
 
